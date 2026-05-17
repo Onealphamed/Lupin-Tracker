@@ -19,7 +19,10 @@
  *                            set_cell_done      → toggle a cell green/clear
  *                            register_recipient → add a Telegram chat
  *   4. onEditHook(e)     – installable onEdit; POSTs month/therapy/stage
- *                          context to /api/sheet-edit for Telegram fan-out.
+ *                          context to /api/sheet-edit on VALUE edits.
+ *   4b. onChangeHook(e)  – installable onChange (FORMAT); same fan-out for
+ *                          COLOUR-only edits (painting a cell green), which
+ *                          onEdit cannot see.
  *   5. weeklyDigest()    – Monday 9 AM; hits /api/weekly.
  */
 
@@ -239,29 +242,33 @@ function _isGreen(hex) {
   return g >= 60 && (g - r) >= 8 && (g - b) >= 8;
 }
 
-// ───────────────────────── onEdit hook → Flask ─────────────────────────
+// ───────────────────────── notify helper ─────────────────────────
 
-function onEditHook(e) {
-  if (!e || !e.range) return;
-  const sheet = e.range.getSheet();
-  const dataSheet = _dataSheet(null);
-  if (!dataSheet || sheet.getName() !== dataSheet.getName()) return;
-  const row = e.range.getRow();
-  const col = e.range.getColumn();
+// Build month/therapy/stage context for a single cell and POST it to the
+// Flask /api/sheet-edit webhook. Shared by onEditHook (value edits) and
+// onChangeHook (colour-only edits).
+function _notifyCell(sheet, row, col, oldValue, newValue) {
   if (row === 1) return; // header
-
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
   const header = headers[col - 1] || "";
 
-  // Locate the Month and Therapy columns by fuzzy header match.
-  let monthCol = -1, therapyCol = -1;
+  // Locate Month, Therapy and the stage columns by fuzzy header match.
+  let monthCol = -1, therapyCol = -1, commentCol = -1;
   for (let i = 0; i < headers.length; i++) {
     const hs = String(headers[i]).toLowerCase();
     if (monthCol < 0 && hs.indexOf("month") >= 0) monthCol = i + 1;
     else if (therapyCol < 0 && hs.indexOf("therap") >= 0) therapyCol = i + 1;
+    if (hs.indexOf("comment") >= 0 || hs.indexOf("remark") >= 0) commentCol = i + 1;
   }
 
-  // Month is forward-filled — walk up until we hit a non-empty month cell.
+  // Only the four stage columns are worth a colour alert (between
+  // Therapies and Comments, header non-empty). Skip Month/Therapy/blank.
+  const stageStart = therapyCol > 0 ? therapyCol + 1 : 0;
+  const stageEnd = commentCol > 0 ? commentCol : headers.length + 1;
+  const isStageCol = col > stageStart && col < stageEnd && String(header).trim() !== "";
+  if (!isStageCol) return;
+
+  // Month is forward-filled — walk up until a non-empty month cell.
   let month = "";
   if (monthCol > 0) {
     for (let r = row; r >= 2; r--) {
@@ -282,8 +289,8 @@ function onEditHook(e) {
     therapy: therapy,
     stage: header,
     header: header,
-    old_value: e.oldValue || "",
-    new_value: String(e.value || ""),
+    old_value: oldValue || "",
+    new_value: newValue == null ? "" : String(newValue),
     is_done: _isGreen(bg),
     editor: (Session.getActiveUser() || {}).getEmail ? Session.getActiveUser().getEmail() : "",
   };
@@ -294,6 +301,53 @@ function onEditHook(e) {
         payload: JSON.stringify(payload), muteHttpExceptions: true,
       });
     } catch (err) { /* best-effort */ }
+  }
+}
+
+// ───────────────────────── onEdit hook → Flask ─────────────────────────
+// Fires on VALUE/content edits (typing a date, "Yes", clearing a cell).
+
+function onEditHook(e) {
+  if (!e || !e.range) return;
+  const sheet = e.range.getSheet();
+  const dataSheet = _dataSheet(null);
+  if (!dataSheet || sheet.getName() !== dataSheet.getName()) return;
+  _notifyCell(sheet, e.range.getRow(), e.range.getColumn(),
+              e.oldValue || "", String(e.value || ""));
+}
+
+// ───────────────────── onChange hook → Flask ─────────────────────
+// Apps Script's onEdit does NOT fire on background-colour changes, only
+// on value changes. onChange WITH changeType "FORMAT" does. So when a
+// user paints a cell green (no typing), this is the trigger that fans
+// the Telegram alert. We read the active selection (the cells just
+// formatted) and notify for any stage cell among them.
+//
+// We deliberately ignore changeType "EDIT" here — onEditHook already
+// covers value edits, so handling EDIT in both would double-notify.
+
+function onChangeHook(e) {
+  if (!e || e.changeType !== "FORMAT") return;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dataSheet = _dataSheet(null);
+  if (!dataSheet) return;
+  let range;
+  try { range = ss.getActiveRange(); } catch (err) { return; }
+  if (!range) return;
+  const sheet = range.getSheet();
+  if (sheet.getName() !== dataSheet.getName()) return;
+
+  const r0 = range.getRow();
+  const c0 = range.getColumn();
+  const nR = range.getNumRows();
+  const nC = range.getNumColumns();
+  // Cap the scan so a "select all → recolour" can't fan out hundreds of
+  // messages. _notifyCell itself ignores non-stage columns.
+  if (nR * nC > 60) return;
+  for (let dr = 0; dr < nR; dr++) {
+    for (let dc = 0; dc < nC; dc++) {
+      _notifyCell(sheet, r0 + dr, c0 + dc, "", "");
+    }
   }
 }
 
@@ -318,8 +372,14 @@ function installTriggers() {
   removeAllTriggers();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ScriptApp.newTrigger("onEditHook").forSpreadsheet(ss).onEdit().create();
+  ScriptApp.newTrigger("onChangeHook").forSpreadsheet(ss).onChange().create();
   ScriptApp.newTrigger("weeklyDigest").timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).create();
-  SpreadsheetApp.getUi().alert("Triggers installed: onEdit (live) + weekly digest (Mon 9 AM).");
+  SpreadsheetApp.getUi().alert(
+    "Triggers installed:\n" +
+    "• onEdit — value edits (typing a date / Yes)\n" +
+    "• onChange — colour-only edits (painting a cell green)\n" +
+    "• weekly digest — Mon 9 AM"
+  );
 }
 
 function removeAllTriggers() {

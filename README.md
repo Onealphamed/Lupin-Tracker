@@ -12,7 +12,8 @@ an empty / uncoloured cell is *pending*. Exactly two states — that's it.
 - **Therapy-wise** view: collapsible card per therapy with a Month × Stage matrix + comments
 - Click any cell to toggle it green/clear directly from the dashboard
 - Live iframe mirror of the actual sheet (true colours)
-- Telegram bot: alerts on every sheet edit + a Monday 9 AM weekly digest
+- Telegram bot: alerts on every sheet edit **including colour-only changes**
+  (painting a cell green) + a Monday 9 AM weekly digest
 
 The Google Sheet is the **single source of truth**. The dashboard reads it live; the
 bot fires on edits.
@@ -89,7 +90,8 @@ Open the sheet → **Share** → "Anyone with the link" → **Viewer**.
 
 ### Step 5 — Connect the two
 1. In `google_apps_script.js` set `DASHBOARD_URL` to the Render URL, **Save**, redeploy.
-2. Sheet menu → **⚙️ Install triggers** (onEdit + weekly digest).
+2. Sheet menu → **⚙️ Install triggers** (onEdit + onChange + weekly digest).
+   Re-run this whenever you paste an updated script.
 3. Point the Telegram webhook at the dashboard:
    `https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://lupin-tracker.onrender.com/api/telegram`
 4. DM your bot `/start` to register for reminders.
