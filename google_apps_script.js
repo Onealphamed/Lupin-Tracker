@@ -248,7 +248,7 @@ function _isGreen(hex) {
 // Flask /api/sheet-edit webhook. Shared by onEditHook (value edits) and
 // onChangeHook (colour-only edits).
 function _notifyCell(sheet, row, col, oldValue, newValue) {
-  if (row === 1) return; // header
+  if (row === 1) { Logger.log("skip: header row"); return; }
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
   const header = headers[col - 1] || "";
 
@@ -266,7 +266,9 @@ function _notifyCell(sheet, row, col, oldValue, newValue) {
   const stageStart = therapyCol > 0 ? therapyCol + 1 : 0;
   const stageEnd = commentCol > 0 ? commentCol : headers.length + 1;
   const isStageCol = col > stageStart && col < stageEnd && String(header).trim() !== "";
-  if (!isStageCol) return;
+  Logger.log("cell r%s c%s header='%s' stageStart=%s stageEnd=%s isStageCol=%s",
+             row, col, header, stageStart, stageEnd, isStageCol);
+  if (!isStageCol) { Logger.log("skip: not a stage column"); return; }
 
   // Month is forward-filled — walk up until a non-empty month cell.
   let month = "";
@@ -294,13 +296,21 @@ function _notifyCell(sheet, row, col, oldValue, newValue) {
     is_done: _isGreen(bg),
     editor: (Session.getActiveUser() || {}).getEmail ? Session.getActiveUser().getEmail() : "",
   };
-  if (DASHBOARD_URL && DASHBOARD_URL.indexOf("http") === 0) {
-    try {
-      UrlFetchApp.fetch(DASHBOARD_URL + "/api/sheet-edit", {
-        method: "post", contentType: "application/json",
-        payload: JSON.stringify(payload), muteHttpExceptions: true,
-      });
-    } catch (err) { /* best-effort */ }
+  Logger.log("payload month='%s' therapy='%s' stage='%s' is_done=%s bg=%s",
+             month, therapy, header, payload.is_done, bg);
+  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) {
+    Logger.log("ABORT: DASHBOARD_URL not set ('%s') — set it at the top of this script", DASHBOARD_URL);
+    return;
+  }
+  try {
+    const resp = UrlFetchApp.fetch(DASHBOARD_URL + "/api/sheet-edit", {
+      method: "post", contentType: "application/json",
+      payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    Logger.log("POST /api/sheet-edit -> HTTP %s body=%s",
+               resp.getResponseCode(), String(resp.getContentText()).substring(0, 300));
+  } catch (err) {
+    Logger.log("POST failed: %s", err);
   }
 }
 
@@ -327,15 +337,18 @@ function onEditHook(e) {
 // covers value edits, so handling EDIT in both would double-notify.
 
 function onChangeHook(e) {
-  if (!e || e.changeType !== "FORMAT") return;
+  Logger.log("onChangeHook changeType=%s", e && e.changeType);
+  if (!e || e.changeType !== "FORMAT") { Logger.log("skip: not FORMAT"); return; }
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const dataSheet = _dataSheet(null);
-  if (!dataSheet) return;
+  if (!dataSheet) { Logger.log("skip: no data sheet"); return; }
   let range;
-  try { range = ss.getActiveRange(); } catch (err) { return; }
-  if (!range) return;
+  try { range = ss.getActiveRange(); } catch (err) { Logger.log("getActiveRange err: %s", err); return; }
+  if (!range) { Logger.log("skip: no active range"); return; }
   const sheet = range.getSheet();
-  if (sheet.getName() !== dataSheet.getName()) return;
+  Logger.log("active range %s on sheet '%s' (data sheet '%s')",
+             range.getA1Notation(), sheet.getName(), dataSheet.getName());
+  if (sheet.getName() !== dataSheet.getName()) { Logger.log("skip: not the data sheet"); return; }
 
   const r0 = range.getRow();
   const c0 = range.getColumn();
@@ -343,7 +356,7 @@ function onChangeHook(e) {
   const nC = range.getNumColumns();
   // Cap the scan so a "select all → recolour" can't fan out hundreds of
   // messages. _notifyCell itself ignores non-stage columns.
-  if (nR * nC > 60) return;
+  if (nR * nC > 60) { Logger.log("skip: range too big (%sx%s)", nR, nC); return; }
   for (let dr = 0; dr < nR; dr++) {
     for (let dc = 0; dc < nC; dc++) {
       _notifyCell(sheet, r0 + dr, c0 + dc, "", "");
