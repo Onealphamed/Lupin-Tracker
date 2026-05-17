@@ -602,12 +602,27 @@ def sheet_edit():
             # Surface why Telegram refused (e.g. 403 = user never /started
             # this bot, 400 = bad chat id). Truncated, no secrets.
             tg_error = str(resp.get("description") or resp.get("error_code") or resp)[:160]
+    # Full transparency block so the Apps Script log shows exactly what
+    # the Recipients tab looks like to the server — no more guessing.
+    raw = _gviz_csv(TAB_RECIPIENTS)
+    headers_seen = raw[0] if raw else []
+    recip_dump = [
+        {
+            "name": r["name"],
+            "chat_id_len": len(r["chat_id"]),
+            "chat_id_digits": r["chat_id"].lstrip("-").isdigit(),
+            "notify": r["notify_on_edit"],
+        }
+        for r in recips
+    ]
     return jsonify({
         "ok": True,
         "sent": sent,
         "recipients_total": len(recips),
         "recipients_notify": len(notify_list),
-        "first_chat_id_len": len(notify_list[0]["chat_id"]) if notify_list else 0,
+        "headers_seen": headers_seen,
+        "recipients": recip_dump,
+        "rows_in_tab": max(0, len(raw) - 1) if raw else 0,
         "tg_error": tg_error,
     })
 
