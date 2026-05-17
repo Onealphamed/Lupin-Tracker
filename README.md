@@ -47,8 +47,20 @@ bot fires on edits.
 Open the sheet → **Share** → "Anyone with the link" → **Viewer**.
 
 ### Step 2 — Create the Telegram bot
+
+> ⚠️ **Create a brand-new bot — do NOT reuse the Zydus bot token.**
+> Lupin is a different client. Each tracker is isolated only if it has its
+> **own** bot token (its own `TELEGRAM_BOT_TOKEN`) and its **own** sheet's
+> `Recipients` tab. They never cross-notify because:
+> - the token is per-Render-service (not in the code), and
+> - recipients live in this sheet's `Recipients` tab, separate from Zydus's.
+>
+> The single way a Lupin update could ever reach a Zydus client is if you
+> paste the *same* token into both — so use a separate bot here.
+
 1. Telegram → DM `@BotFather` → `/newbot`.
-2. Name it `Lupin Tracker`, username e.g. `lupin_tracker_bot`.
+2. Name it `Lupin Tracker`, username e.g. `lupin_tracker_bot`
+   (must be different from the Zydus bot).
 3. Copy the **bot token** (looks like `7891234567:AAH...`).
 
 ### Step 3 — Paste the Apps Script
