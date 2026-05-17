@@ -520,16 +520,35 @@ def _recipients() -> list[dict[str, str]]:
     rows = _rows_as_dicts(_gviz_csv(TAB_RECIPIENTS))
     out = []
     for r in rows:
-        chat_id = (r.get("Chat ID") or "").strip()
+        # Match columns fuzzily so hand-made tabs / header typos / trailing
+        # spaces don't silently drop everyone. First header containing the
+        # keyword wins.
+        def col(*keywords: str) -> str:
+            for k, v in r.items():
+                kl = k.strip().lower()
+                if any(kw in kl for kw in keywords):
+                    return (v or "").strip()
+            return ""
+
+        chat_id = col("chat")
         if not chat_id:
             continue
-        yn = lambda v: (v or "").strip().lower() in ("yes", "y", "true", "1", "✔", "✓")
+
+        # Explicit No/false/0 suppresses; ANYTHING else (incl. blank) is
+        # treated as opted-in. Reason: people who registered but left the
+        # cell empty still expect alerts — silent opt-out caused exactly
+        # the "I registered but get nothing" failure.
+        def opted_in(v: str) -> bool:
+            return v.strip().lower() not in ("no", "n", "false", "0", "✘", "✗", "x")
+
+        notify_raw = col("notify", "on edit", "edit")
+        weekly_raw = col("weekly", "digest")
         out.append({
-            "name": r.get("Name", "").strip() or "Unnamed",
-            "role": r.get("Role", "").strip(),
+            "name": col("name") or "Unnamed",
+            "role": col("role"),
             "chat_id": chat_id,
-            "notify_on_edit": yn(r.get("Notify on edit?", "")),
-            "weekly_digest": yn(r.get("Weekly digest?", "")),
+            "notify_on_edit": opted_in(notify_raw),
+            "weekly_digest": opted_in(weekly_raw),
         })
     return out
 
