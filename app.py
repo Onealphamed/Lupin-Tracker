@@ -571,13 +571,26 @@ def sheet_edit():
         lines.append(f"👤 <i>{_html_escape(editor)}</i>")
 
     text = "\n".join(lines)
+    recips = _recipients()
+    notify_list = [r for r in recips if r["notify_on_edit"]]
     sent = 0
-    for r in _recipients():
-        if not r["notify_on_edit"]:
-            continue
-        if _tg("sendMessage", chat_id=r["chat_id"], text=text, parse_mode="HTML").get("ok"):
+    tg_error = ""
+    for r in notify_list:
+        resp = _tg("sendMessage", chat_id=r["chat_id"], text=text, parse_mode="HTML")
+        if resp.get("ok"):
             sent += 1
-    return jsonify({"ok": True, "sent": sent})
+        elif not tg_error:
+            # Surface why Telegram refused (e.g. 403 = user never /started
+            # this bot, 400 = bad chat id). Truncated, no secrets.
+            tg_error = str(resp.get("description") or resp.get("error_code") or resp)[:160]
+    return jsonify({
+        "ok": True,
+        "sent": sent,
+        "recipients_total": len(recips),
+        "recipients_notify": len(notify_list),
+        "first_chat_id_len": len(notify_list[0]["chat_id"]) if notify_list else 0,
+        "tg_error": tg_error,
+    })
 
 
 @app.route("/api/weekly", methods=["POST", "GET"])
