@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: lupin-tracker
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 2
+    envVars:
+      - key: TRACKER_SHEET_ID
+        sync: false
+      - key: TRACKER_TAB
+        sync: false
+      - key: APPS_SCRIPT_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: TICK_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
