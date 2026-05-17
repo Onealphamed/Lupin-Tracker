@@ -58,12 +58,25 @@ from flask import (
 
 # ───────────────────────────── config ─────────────────────────────
 
-SHEET_ID = os.environ.get("TRACKER_SHEET_ID", "")
-APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "Alphamed@4321")
-TICK_PASSWORD = os.environ.get("TICK_PASSWORD", DASHBOARD_PASSWORD)
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-change-me")
+# `os.environ.get(key, default)` only falls back when the key is ABSENT.
+# On Render an env var declared in render.yaml (e.g. SECRET_KEY with
+# generateValue) can exist but be an empty string if the service wasn't
+# created from the Blueprint — an empty secret key makes Flask refuse all
+# sessions and 500 every login. `_env` treats blank as missing so a sane
+# default always applies. The SECRET_KEY fallback is a fixed string (not
+# random) on purpose: with --workers 2 a random per-process key would
+# differ between workers and logins wouldn't persist.
+def _env(key: str, default: str = "") -> str:
+    v = os.environ.get(key)
+    return v.strip() if v and v.strip() else default
+
+
+SHEET_ID = _env("TRACKER_SHEET_ID")
+APPS_SCRIPT_URL = _env("APPS_SCRIPT_URL")
+TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
+DASHBOARD_PASSWORD = _env("DASHBOARD_PASSWORD", "Alphamed@4321")
+TICK_PASSWORD = _env("TICK_PASSWORD", DASHBOARD_PASSWORD)
+SECRET_KEY = _env("SECRET_KEY", "lupin-tracker-stable-secret-change-me")
 
 # Main data tab. The Lupin sheet keeps everything on one tab; if the user
 # renames it, override with TRACKER_TAB.
