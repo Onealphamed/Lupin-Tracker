@@ -379,6 +379,30 @@ function weeklyDigestNow() {
   SpreadsheetApp.getUi().alert("Triggered weekly digest. Check Telegram.");
 }
 
+// ───────────────────────── keep-warm pinger ─────────────────────────
+// Render's free plan idles the container after ~15 min of inactivity;
+// the next hit then cold-starts (~30–50 s). This time-based trigger
+// pings /healthz every 10 min during work hours so the user never sees
+// a cold start. Window is 08:00–22:00 in the script's timezone — that's
+// ~420 hours/month of running time, well under Render free's 750-hour
+// monthly cap, while the dashboard is responsive whenever anyone is
+// likely to open it. Outside the window the service is allowed to sleep.
+//
+// Edit BUSY_START_HOUR / BUSY_END_HOUR below if you want a wider window,
+// but going 24/7 (0–24) trims your month-end buffer to ~30 hours.
+
+const BUSY_START_HOUR = 8;   // inclusive
+const BUSY_END_HOUR = 22;    // exclusive
+
+function keepWarm() {
+  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) return;
+  const hour = Number(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "H"));
+  if (hour < BUSY_START_HOUR || hour >= BUSY_END_HOUR) return;
+  try {
+    UrlFetchApp.fetch(DASHBOARD_URL + "/healthz", { muteHttpExceptions: true });
+  } catch (err) { /* best-effort; sleep would mean the fetch times out, ignore */ }
+}
+
 // ───────────────────────── trigger management ─────────────────────────
 
 function installTriggers() {
@@ -387,11 +411,14 @@ function installTriggers() {
   ScriptApp.newTrigger("onEditHook").forSpreadsheet(ss).onEdit().create();
   ScriptApp.newTrigger("onChangeHook").forSpreadsheet(ss).onChange().create();
   ScriptApp.newTrigger("weeklyDigest").timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).create();
+  ScriptApp.newTrigger("keepWarm").timeBased().everyMinutes(10).create();
   SpreadsheetApp.getUi().alert(
     "Triggers installed:\n" +
     "• onEdit — value edits (typing a date / Yes)\n" +
     "• onChange — colour-only edits (painting a cell green)\n" +
-    "• weekly digest — Mon 9 AM"
+    "• weekly digest — Mon 9 AM\n" +
+    "• keep-warm — pings Render every 10 min (08:00–22:00) so the\n" +
+    "  dashboard doesn't cold-start when you open it"
   );
 }
 
