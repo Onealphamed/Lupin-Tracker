@@ -191,6 +191,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-view="month">🗓 Month-wise</button>
     <button class="tab-btn" data-view="therapy">💊 Therapy-wise</button>
+    <button class="tab-btn" data-view="non-therapy">📰 Non-therapy</button>
     <button class="tab-btn" data-view="sheet">📄 Live sheet</button>
   </div>
 
@@ -206,6 +207,7 @@
 
   <div class="view active" id="view-month"><div id="month-groups"></div></div>
   <div class="view" id="view-therapy"><div id="therapy-groups"></div></div>
+  <div class="view" id="view-non-therapy"><div id="non-therapy-groups"></div></div>
   <div class="view" id="view-sheet">
     <div class="panel">
       <h2>📄 Live sheet (actual colours)</h2>
@@ -234,6 +236,7 @@ async function refresh(){
   renderStageBars(d.per_stage);
   renderMonthView(d);
   renderTherapyView(d);
+  renderNonTherapyView(d);
 }
 
 // Which side owns each stage. OAM = our team's deliverables; LUPIN = the
@@ -249,6 +252,15 @@ const OWNER_META = {
   OAM:   {label:"OAM (Alphamed)", hue:"#4fc3f7"},
   Lupin: {label:"Lupin (Client)", hue:"#ff9e80"},
 };
+
+// Items that live in the "Therapies" column of the sheet but aren't
+// actually therapy areas — they get their own tab so the Therapy-wise
+// roll-ups stay clean. Match is case-insensitive on the trimmed name;
+// add new non-therapy items here as the sheet grows.
+const NON_THERAPY_ITEMS = new Set(["cpd", "newsletter"]);
+function isNonTherapy(name){
+  return NON_THERAPY_ITEMS.has(String(name||"").trim().toLowerCase());
+}
 
 // Walk the full grid once → per-owner counts + the exact items behind
 // each count, so the drilldown opens instantly without another scan.
@@ -310,9 +322,16 @@ function renderKpis(d){
 
   // Small info tiles (the four removed KPIs are gone; Months & Therapies
   // stay as they're still useful at a glance).
+  // Therapy count excludes CPD/Newsletter (they live in the Non-therapy
+  // tab) so the tile matches what's actually shown in the Therapy-wise
+  // view. Order list comes straight from the sheet header.
+  const allNames = d.therapies_order || [];
+  const therapyCount = allNames.filter(n=>!isNonTherapy(n)).length;
+  const nonTherapyCount = allNames.filter(n=>isNonTherapy(n)).length;
   const small = [
-    {label:"Months",    value:k.months ?? 0},
-    {label:"Therapies", value:k.therapies ?? 0},
+    {label:"Months",       value:k.months ?? 0},
+    {label:"Therapies",    value:therapyCount},
+    {label:"Non-therapy",  value:nonTherapyCount},
   ];
   document.getElementById("kpi-strip").innerHTML = small.map(c=>
     `<div class="kpi"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
@@ -419,14 +438,22 @@ function renderMonthView(d){
 }
 
 // Therapy-wise: one group per therapy, with a month × stage matrix.
-function renderTherapyView(d){
+// Shared renderer for the Therapy-wise and Non-therapy tabs. Both views
+// list one collapsible card per "therapy" name with a Month × Stage
+// matrix; they only differ in WHICH names get through and how the empty
+// state reads. `accept(name)` decides each item's tab.
+function _renderTherapyLike(d, containerId, accept, icon, emptyLabel){
   const q = query();
-  const wrap = document.getElementById("therapy-groups");
+  const wrap = document.getElementById(containerId);
   const byTherapy = {};
   for(const g of d.grid){
+    if(!accept(g.therapy)) continue;
     (byTherapy[g.therapy] = byTherapy[g.therapy] || []).push(g);
   }
-  const html = (d.therapies||[]).map((tb,idx)=>{
+  // Preserve the per-therapy roll-up numbers from the backend, but only
+  // for items this view accepts.
+  const groups = (d.therapies||[]).filter(tb => accept(tb.therapy));
+  const html = groups.map((tb,idx)=>{
     const rows = (byTherapy[tb.therapy]||[]).filter(g=>{
       if(!q) return true;
       return (g.month||"").toLowerCase().includes(q) ||
@@ -444,7 +471,7 @@ function renderTherapyView(d){
     return `<div class="group ${open}">
       <div class="group-head" onclick="this.parentElement.classList.toggle('open')">
         <div class="gh-left"><span class="caret">▶</span>
-          <div><div class="gh-title">💊 ${esc(tb.therapy)}</div>
+          <div><div class="gh-title">${icon} ${esc(tb.therapy)}</div>
             <div class="gh-sub">${tb.done}/${tb.total} stages · ${Object.keys(tb.months||{}).length} months</div></div>
         </div>
         <div style="text-align:right"><div class="gh-pct">${tb.pct}%</div></div>
@@ -455,7 +482,14 @@ function renderTherapyView(d){
         <tbody>${body}</tbody></table>
       </div></div>`;
   }).join("");
-  wrap.innerHTML = html || `<div class="empty-state">No therapies match "${esc(q)}".</div>`;
+  wrap.innerHTML = html || `<div class="empty-state">No ${esc(emptyLabel)} ${q ? `match "${esc(q)}"` : "to show"}.</div>`;
+}
+
+function renderTherapyView(d){
+  _renderTherapyLike(d, "therapy-groups", n => !isNonTherapy(n), "💊", "therapies");
+}
+function renderNonTherapyView(d){
+  _renderTherapyLike(d, "non-therapy-groups", n => isNonTherapy(n), "📰", "non-therapy items");
 }
 
 // A single stage cell. Clicking it toggles the green fill in the sheet
@@ -497,7 +531,7 @@ document.querySelectorAll(".tab-btn").forEach(b=>{
 let _t=null;
 document.getElementById("search").addEventListener("input",()=>{
   clearTimeout(_t);
-  _t=setTimeout(()=>{ if(_data){renderMonthView(_data);renderTherapyView(_data);} },140);
+  _t=setTimeout(()=>{ if(_data){renderMonthView(_data);renderTherapyView(_data);renderNonTherapyView(_data);} },140);
 });
 document.getElementById("expand-all").addEventListener("click",()=>
   document.querySelectorAll(".view.active .group").forEach(g=>g.classList.add("open")));
