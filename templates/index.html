@@ -41,6 +41,56 @@
   .kpi.warn .value{color:var(--warn)}
   .kpi.bad .value{color:var(--bad)}
 
+  /* Owner-grouped cards: two big cards (OAM, Lupin) each with clickable
+     Done/Pending sub-tiles. Hue is per-owner so OAM and the client read
+     as distinct at a glance. */
+  .owner-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));
+    gap:14px;margin-bottom:14px}
+  .owner-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:16px;box-shadow:var(--shadow);border-left:4px solid var(--owner-hue,var(--accent))}
+  .oc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+  .oc-title{font-size:14px;font-weight:700;letter-spacing:.3px}
+  .oc-sub{font-size:11px;color:var(--text-dim);margin-top:3px}
+  .oc-pct{font-size:24px;font-weight:700;color:var(--owner-hue,var(--accent))}
+  .oc-bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:12px}
+  .oc-bar .fill{height:100%;background:var(--owner-hue,var(--accent));transition:width .4s}
+  .oc-tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .oc-tile{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;text-align:left;cursor:pointer;color:var(--text);
+    font-family:inherit;transition:transform .1s,border-color .15s,background .15s}
+  .oc-tile:hover{transform:translateY(-1px);border-color:var(--owner-hue,var(--accent));
+    background:rgba(255,255,255,.03)}
+  .oc-tile.done{border-left:3px solid var(--done)}
+  .oc-tile.pending{border-left:3px solid var(--warn)}
+  .oct-label{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px}
+  .oct-value{font-size:22px;font-weight:700;margin-top:4px}
+  .oc-tile.done .oct-value{color:var(--done)}
+  .oc-tile.pending .oct-value{color:var(--warn)}
+
+  /* Drilldown modal — opens when you click a Done/Pending tile. Lists
+     the items grouped by month with therapy / stage / value / comment. */
+  .dd-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);
+    z-index:50;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}
+  .dd-overlay.open{display:flex}
+  .dd-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    width:100%;max-width:980px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .dd-head{display:flex;justify-content:space-between;align-items:center;
+    padding:16px 20px;border-bottom:1px solid var(--border)}
+  .dd-head #dd-title{font-size:15px;font-weight:600}
+  .dd-close{background:transparent;border:0;color:var(--text-dim);font-size:20px;cursor:pointer;
+    padding:4px 10px;border-radius:6px}
+  .dd-close:hover{color:var(--bad);background:rgba(239,83,80,.1)}
+  .dd-body-scroll{padding:14px 20px;max-height:70vh;overflow-y:auto}
+  .dd-month{margin-bottom:18px}
+  .dd-month-head{font-size:13px;font-weight:600;color:var(--text);padding:6px 0;
+    border-bottom:1px dashed var(--border);margin-bottom:8px;display:flex;align-items:center;gap:10px}
+  .dd-month-head .dd-count{font-size:11px;color:var(--text-dim);font-weight:400;
+    background:var(--panel-2);padding:2px 8px;border-radius:10px}
+  .dd-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .dd-table th,.dd-table td{padding:7px 8px;text-align:left;border-bottom:1px solid var(--border)}
+  .dd-table th{color:var(--text-dim);font-weight:500;text-transform:uppercase;font-size:10px;letter-spacing:.5px}
+  .dd-table td.dd-comment{color:var(--text-dim);font-style:italic;max-width:280px;white-space:normal}
+
   .stagebar-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
     gap:10px;margin-bottom:22px}
   .stagebar{background:var(--panel);border:1px solid var(--border);
@@ -134,6 +184,7 @@
     is set, completion will reflect the actual green fills.
   </div>
 
+  <div class="owner-strip" id="owner-strip"></div>
   <div class="kpi-strip" id="kpi-strip"></div>
   <div class="stagebar-wrap" id="stagebars"></div>
 
@@ -179,25 +230,143 @@ async function refresh(){
   document.getElementById("last-updated").textContent =
     "Updated " + new Date(d.updated_at).toLocaleTimeString();
   document.getElementById("color-banner").classList.toggle("hidden", !!d.color_source);
-  renderKpis(d.kpi);
+  renderKpis(d);
   renderStageBars(d.per_stage);
   renderMonthView(d);
   renderTherapyView(d);
 }
 
-function renderKpis(k){
-  const cards = [
-    {label:"Overall progress", value:k.progress_pct+"%", cls:k.progress_pct>=70?"good":(k.progress_pct>=40?"warn":"bad")},
-    {label:"Stages done", value:k.done_cells+" / "+k.total_cells, cls:""},
-    {label:"Pending stages", value:k.pending_cells, cls:k.pending_cells?"warn":"good"},
-    {label:"Rows fully done", value:k.fully_done_rows+" / "+k.total_rows, cls:""},
-    {label:"Months", value:k.months, cls:""},
-    {label:"Therapies", value:k.therapies, cls:""},
-  ];
-  document.getElementById("kpi-strip").innerHTML = cards.map(c=>
-    `<div class="kpi ${c.cls}"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
-  ).join("");
+// Which side owns each stage. OAM = our team's deliverables; LUPIN = the
+// client's. Used by the KPI strip to split done/pending by responsibility
+// and by the drilldown to filter the grid.
+const STAGE_OWNERS = {
+  "TOC Shared":   "OAM",
+  "TOC Approved": "Lupin",
+  "Design Plan":  "OAM",
+  "CRD Upload":   "OAM",
+};
+const OWNER_META = {
+  OAM:   {label:"OAM (Alphamed)", hue:"#4fc3f7"},
+  Lupin: {label:"Lupin (Client)", hue:"#ff9e80"},
+};
+
+// Walk the full grid once → per-owner counts + the exact items behind
+// each count, so the drilldown opens instantly without another scan.
+function computeOwnerStats(grid){
+  const out = {
+    OAM:   {done:0, pending:0, done_items:[], pending_items:[]},
+    Lupin: {done:0, pending:0, done_items:[], pending_items:[]},
+  };
+  for(const row of (grid||[])){
+    for(const s of (row.stages||[])){
+      const owner = STAGE_OWNERS[s.name];
+      if(!owner || !out[owner]) continue;
+      const key = s.done ? "done" : "pending";
+      out[owner][key]++;
+      out[owner][key+"_items"].push({
+        month: row.month, therapy: row.therapy, stage: s.name,
+        value: s.value, comment: row.comment,
+      });
+    }
+  }
+  return out;
 }
+
+function renderKpis(d){
+  const k = d.kpi || {};
+  const stats = computeOwnerStats(d.grid);
+  // Build the per-owner cards (clickable Done / Pending tiles).
+  const ownerCards = ["OAM","Lupin"].map(owner=>{
+    const s = stats[owner];
+    const m = OWNER_META[owner];
+    const total = s.done + s.pending;
+    const pct = total ? Math.round(100*s.done/total) : 0;
+    const ownerStages = Object.entries(STAGE_OWNERS)
+      .filter(([,o])=>o===owner).map(([n])=>n).join(" · ");
+    return `<div class="owner-card" style="--owner-hue:${m.hue}">
+      <div class="oc-head">
+        <div>
+          <div class="oc-title">${esc(m.label)}</div>
+          <div class="oc-sub">${esc(ownerStages)}</div>
+        </div>
+        <div class="oc-pct">${pct}%</div>
+      </div>
+      <div class="oc-bar"><div class="fill" style="width:${pct}%"></div></div>
+      <div class="oc-tiles">
+        <button class="oc-tile done" data-owner="${owner}" data-state="done"
+          title="See completed ${esc(m.label)} stages">
+          <div class="oct-label">✅ Done</div>
+          <div class="oct-value">${s.done}</div>
+        </button>
+        <button class="oc-tile pending" data-owner="${owner}" data-state="pending"
+          title="See pending ${esc(m.label)} stages">
+          <div class="oct-label">⬜ Pending</div>
+          <div class="oct-value">${s.pending}</div>
+        </button>
+      </div>
+    </div>`;
+  }).join("");
+  document.getElementById("owner-strip").innerHTML = ownerCards;
+
+  // Small info tiles (the four removed KPIs are gone; Months & Therapies
+  // stay as they're still useful at a glance).
+  const small = [
+    {label:"Months",    value:k.months ?? 0},
+    {label:"Therapies", value:k.therapies ?? 0},
+  ];
+  document.getElementById("kpi-strip").innerHTML = small.map(c=>
+    `<div class="kpi"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
+  ).join("");
+
+  // Bind clicks AFTER innerHTML write — querySelectorAll sees new nodes.
+  document.querySelectorAll("#owner-strip .oc-tile").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const owner = btn.dataset.owner;
+      const state = btn.dataset.state;
+      openDrilldown(owner, state, stats[owner][state+"_items"]);
+    });
+  });
+}
+
+// Drilldown modal: list items grouped by month for the chosen owner+state.
+function openDrilldown(owner, state, items){
+  const m = OWNER_META[owner];
+  const byMonth = {};
+  const monthOrder = [];
+  for(const it of (items||[])){
+    const mo = it.month || "(no month)";
+    if(!(mo in byMonth)){ byMonth[mo] = []; monthOrder.push(mo); }
+    byMonth[mo].push(it);
+  }
+  const body = monthOrder.map(mo=>{
+    const rows = byMonth[mo].map(it=>
+      `<tr>
+        <td>${esc(it.therapy)}</td>
+        <td>${esc(it.stage)}</td>
+        <td>${esc(it.value||"—")}</td>
+        <td class="dd-comment">${esc(it.comment||"")}</td>
+      </tr>`).join("");
+    return `<div class="dd-month">
+      <div class="dd-month-head">🗓 ${esc(mo)} <span class="dd-count">${byMonth[mo].length}</span></div>
+      <table class="dd-table">
+        <thead><tr><th>Therapy</th><th>Stage</th><th>Sheet value</th><th>Comment</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+  const stateLabel = state === "done" ? "✅ Completed" : "⬜ Pending";
+  document.getElementById("dd-title").innerHTML =
+    `${esc(m.label)} — ${stateLabel} <span style="color:var(--text-dim);font-weight:400">(${(items||[]).length})</span>`;
+  document.getElementById("dd-body").innerHTML = body ||
+    `<div class="empty-state">Nothing here. 🎉</div>`;
+  document.getElementById("drilldown").classList.add("open");
+}
+function closeDrilldown(){
+  document.getElementById("drilldown").classList.remove("open");
+}
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape") closeDrilldown();
+});
 
 function renderStageBars(per){
   document.getElementById("stagebars").innerHTML = (per||[]).map(s=>`
@@ -344,5 +513,17 @@ else { iframe.srcdoc = '<div style="padding:40px;font-family:Arial">APPS_SCRIPT_
 refresh();
 setInterval(refresh, 60000);
 </script>
+
+<!-- Drilldown modal — populated by openDrilldown() -->
+<div id="drilldown" class="dd-overlay" onclick="if(event.target===this)closeDrilldown()">
+  <div class="dd-card">
+    <div class="dd-head">
+      <div id="dd-title">—</div>
+      <button class="dd-close" onclick="closeDrilldown()" title="Close (Esc)">✕</button>
+    </div>
+    <div id="dd-body" class="dd-body-scroll"></div>
+  </div>
+</div>
+
 </body>
 </html>
