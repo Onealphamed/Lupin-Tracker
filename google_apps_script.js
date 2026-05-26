@@ -92,16 +92,25 @@ function seedRecipients() {
   let recip = ss.getSheetByName(TAB_RECIPIENTS);
   if (!recip) recip = ss.insertSheet(TAB_RECIPIENTS);
   if (recip.getLastRow() === 0) {
-    const headers = ["Name", "Role", "Chat ID", "Notify on edit?", "Weekly digest?", "Notes"];
+    // Email column lets a recipient receive notifications by email even
+    // without a Telegram Chat ID. _recipients() on the Flask side keeps
+    // a row if EITHER channel is present.
+    const headers = ["Name", "Role", "Chat ID", "Email", "Notify on edit?", "Weekly digest?", "Notes"];
     recip.getRange(1, 1, 1, headers.length).setValues([headers])
       .setFontWeight("bold").setBackground("#6aa84f").setFontColor("#fff");
-    recip.appendRow(["(Auto-filled when you /start the Telegram bot)", "Brand Manager", "", "Yes", "Yes", ""]);
+    recip.appendRow(["(Auto-filled when you /start the Telegram bot)", "Brand Manager", "", "", "Yes", "Yes", ""]);
     recip.setFrozenRows(1);
     const yn = SpreadsheetApp.newDataValidation().requireValueInList(["Yes", "No"], true).build();
-    recip.getRange(2, 4, 1000, 1).setDataValidation(yn);
-    recip.getRange(2, 5, 1000, 1).setDataValidation(yn);
+    // Yes/No dropdowns shift by one column now that Email sits at col 4.
+    recip.getRange(2, 5, 1000, 1).setDataValidation(yn);  // Notify on edit?
+    recip.getRange(2, 6, 1000, 1).setDataValidation(yn);  // Weekly digest?
   }
-  SpreadsheetApp.getUi().alert("Recipients tab ready.");
+  SpreadsheetApp.getUi().alert(
+    "Recipients tab ready.\n\n" +
+    "Add a Chat ID for Telegram, an Email for email, or both. " +
+    "Existing tabs without an Email column: just insert one and the " +
+    "dashboard picks it up automatically (column match is fuzzy)."
+  );
 }
 
 // ───────────────────────── doGet: iframe HTML ─────────────────────────
@@ -220,7 +229,10 @@ function _actionRegisterRecipient(body) {
       if (String(data[i][2]) === chatId) return _json({ ok: true, already: true });
     }
   }
-  sheet.appendRow([name, "Team", chatId, "Yes", "Yes", "Auto-registered " + new Date().toISOString()]);
+  // Layout: Name | Role | Chat ID | Email | Notify on edit? | Weekly digest? | Notes
+  // Older tabs without an Email column will get an extra cell harmlessly
+  // appended past the last column — Flask reads by fuzzy header match.
+  sheet.appendRow([name, "Team", chatId, "", "Yes", "Yes", "Auto-registered " + new Date().toISOString()]);
   return _json({ ok: true });
 }
 
@@ -309,9 +321,51 @@ function _notifyCell(sheet, row, col, oldValue, newValue) {
     });
     Logger.log("POST /api/sheet-edit -> HTTP %s body=%s",
                resp.getResponseCode(), String(resp.getContentText()).substring(0, 300));
+    const emailed = _deliverEmailFallback(resp);
+    if (emailed) Logger.log("MailApp delivered email to %s recipient(s)", emailed);
   } catch (err) {
     Logger.log("POST failed: %s", err);
   }
+}
+
+// Render's free tier blocks outbound SMTP (errno 101) so the Flask
+// /api/sheet-edit and /api/weekly responses ship the rendered HTML body
+// + the list of addresses Flask couldn't reach back to us. We deliver
+// each via MailApp.sendEmail which uses the spreadsheet owner's own
+// Google account — no SMTP creds, no App Password needed.
+//
+// MailApp daily quotas: 100 recipients/day on consumer Gmail, 1500 on
+// Google Workspace — well beyond what a tracker needs.
+function _deliverEmailFallback(response) {
+  if (!response) return 0;
+  var sent = 0;
+  try {
+    const text = response.getContentText();
+    if (!text) return 0;
+    const data = JSON.parse(text);
+    const targets = data.email_failed_targets || [];
+    const subject = data.email_subject || "";
+    const html = data.email_html || "";
+    if (!targets.length || !subject || !html) return 0;
+    for (var i = 0; i < targets.length; i++) {
+      const to = String(targets[i] || "").trim();
+      if (!to) continue;
+      try {
+        MailApp.sendEmail({
+          to: to,
+          subject: subject,
+          htmlBody: html,
+          name: "Lupin Tracker",
+        });
+        sent++;
+      } catch (err) {
+        Logger.log("MailApp failed for %s: %s", to, err);
+      }
+    }
+  } catch (err) {
+    Logger.log("_deliverEmailFallback parse failed: %s", err);
+  }
+  return sent;
 }
 
 // ───────────────────────── onEdit hook → Flask ─────────────────────────
@@ -367,16 +421,25 @@ function onChangeHook(e) {
 // ───────────────────────── weekly digest ─────────────────────────
 
 function weeklyDigest() {
-  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) return;
-  UrlFetchApp.fetch(DASHBOARD_URL + "/api/weekly", {
-    method: "post", contentType: "application/json",
-    payload: JSON.stringify({ password: PASSWORD }), muteHttpExceptions: true,
-  });
+  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) return 0;
+  try {
+    const resp = UrlFetchApp.fetch(DASHBOARD_URL + "/api/weekly", {
+      method: "post", contentType: "application/json",
+      payload: JSON.stringify({ password: PASSWORD }), muteHttpExceptions: true,
+    });
+    return _deliverEmailFallback(resp);
+  } catch (err) {
+    return 0;
+  }
 }
 
 function weeklyDigestNow() {
-  weeklyDigest();
-  SpreadsheetApp.getUi().alert("Triggered weekly digest. Check Telegram.");
+  const emailed = weeklyDigest();
+  SpreadsheetApp.getUi().alert(
+    "Triggered weekly digest.\n" +
+    "Telegram: check the bot.\n" +
+    "Email: delivered to " + emailed + " recipient" + (emailed === 1 ? "" : "s") + " via MailApp."
+  );
 }
 
 // ───────────────────────── keep-warm pinger ─────────────────────────

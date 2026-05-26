@@ -20,3 +20,23 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
+      # ── Email (SMTP) — optional. Render's free plan blocks outbound
+      # SMTP on port 587, so the live delivery path is the Apps Script
+      # MailApp fallback (uses the spreadsheet owner's Google account).
+      # If you upgrade to a paid plan, set SMTP_USER + SMTP_PASSWORD to
+      # a Gmail App Password (myaccount.google.com/apppasswords) and
+      # emails go out via SMTP instead.
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_NAME
+        value: Lupin Tracker
+      - key: SMTP_FROM_ADDR
+        sync: false
+      - key: DASHBOARD_PUBLIC_URL
+        value: https://lupin-tracker.onrender.com

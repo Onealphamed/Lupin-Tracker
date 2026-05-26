@@ -40,7 +40,11 @@ import io
 import json
 import os
 import re
+import smtplib
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr
 from functools import wraps
 from typing import Any
 from urllib.parse import urlencode
@@ -77,6 +81,23 @@ TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
 DASHBOARD_PASSWORD = _env("DASHBOARD_PASSWORD", "Alphamed@4321")
 TICK_PASSWORD = _env("TICK_PASSWORD", DASHBOARD_PASSWORD)
 SECRET_KEY = _env("SECRET_KEY", "lupin-tracker-stable-secret-change-me")
+
+# Public URL of this dashboard, used in the "Open dashboard ↗" CTA inside
+# email bodies. Safe to leave blank — emails just omit the button.
+DASHBOARD_PUBLIC_URL = _env("DASHBOARD_PUBLIC_URL", "https://lupin-tracker.onrender.com")
+
+# SMTP / email config. Gmail with an App Password works out of the box.
+# If SMTP_USER / SMTP_PASSWORD are unset, _email() silently no-ops at the
+# SMTP layer and every address comes back as "failed" — Apps Script then
+# delivers via MailApp.sendEmail using the spreadsheet owner's account,
+# which is what we actually rely on (Render's free tier blocks outbound
+# SMTP on port 587 with errno 101, so the MailApp path is the live one).
+SMTP_HOST = _env("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(_env("SMTP_PORT", "587"))
+SMTP_USER = _env("SMTP_USER")
+SMTP_PASSWORD = _env("SMTP_PASSWORD")
+SMTP_FROM_NAME = _env("SMTP_FROM_NAME", "Lupin Tracker")
+SMTP_FROM_ADDR = _env("SMTP_FROM_ADDR", SMTP_USER)
 
 # Main data tab. The Lupin sheet keeps everything on one tab; if the user
 # renames it, override with TRACKER_TAB.
@@ -510,6 +531,69 @@ def _tg(method: str, **payload) -> dict:
         return {}
 
 
+# ─────────────────────────── Email (SMTP) ───────────────────────────
+
+def _email(to_addrs: list[str], subject: str, html_body: str, text_body: str = "") -> tuple[int, list[str]]:
+    """Send an HTML email to one or more recipients via SMTP+STARTTLS.
+
+    Returns (sent_count, failed_addrs). Render's free tier blocks outbound
+    SMTP on port 587 (errno 101), so this almost always fails there — the
+    failed list is then handed back to Apps Script which delivers via
+    MailApp.sendEmail using the spreadsheet owner's Google account. That
+    fallback is the path that actually delivers in production; the SMTP
+    path here is here for local dev and for paid Render plans.
+
+    Each address gets its own message so a bad address can't block the
+    rest of the batch.
+    """
+    if not to_addrs:
+        return 0, []
+    seen: set[str] = set()
+    addrs: list[str] = []
+    for a in to_addrs:
+        a = (a or "").strip()
+        if not a or a in seen:
+            continue
+        seen.add(a)
+        addrs.append(a)
+    if not addrs:
+        return 0, []
+    if not SMTP_USER or not SMTP_PASSWORD:
+        # No SMTP configured locally — return every address as failed so
+        # the MailApp fallback picks them up.
+        return 0, addrs
+
+    if not text_body:
+        text_body = re.sub(r"<[^>]+>", "", html_body).strip()
+
+    sent = 0
+    failed = list(addrs)
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            for addr in addrs:
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = subject
+                msg["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM_ADDR or SMTP_USER))
+                msg["To"] = addr
+                msg.attach(MIMEText(text_body, "plain", "utf-8"))
+                msg.attach(MIMEText(html_body, "html", "utf-8"))
+                try:
+                    server.sendmail(SMTP_FROM_ADDR or SMTP_USER, [addr], msg.as_string())
+                    sent += 1
+                    failed.remove(addr)
+                except Exception:
+                    pass
+    except Exception:
+        # Connection/auth-level failure — every addr in `addrs` stays
+        # "failed" so MailApp can handle them.
+        pass
+    return sent, failed
+
+
 def _html_escape(s: Any) -> str:
     if s is None:
         return ""
@@ -531,7 +615,10 @@ def _recipients() -> list[dict[str, str]]:
             return ""
 
         chat_id = col("chat")
-        if not chat_id:
+        email = col("email", "mail")
+        # Keep the row if EITHER channel is reachable — recipients can be
+        # Telegram-only (chat ID set), email-only (email set), or both.
+        if not chat_id and not email:
             continue
 
         # Explicit No/false/0 suppresses; ANYTHING else (incl. blank) is
@@ -541,27 +628,218 @@ def _recipients() -> list[dict[str, str]]:
         def opted_in(v: str) -> bool:
             return v.strip().lower() not in ("no", "n", "false", "0", "✘", "✗", "x")
 
-        notify_raw = col("notify", "on edit", "edit")
+        notify_raw = col("notify", "on edit")
         weekly_raw = col("weekly", "digest")
         out.append({
             "name": col("name") or "Unnamed",
             "role": col("role"),
             "chat_id": chat_id,
+            "email": email,
             "notify_on_edit": opted_in(notify_raw),
             "weekly_digest": opted_in(weekly_raw),
         })
     return out
 
 
+# ─────────────────── Email body formatters ───────────────────
+#
+# Gmail (and most clients) strip <style> blocks, so the HTML below uses
+# inline styles only. Lupin's green theme: header bar #6aa84f, dashboard
+# CTA also green, status pill green when done / amber when pending.
+
+def _email_kv(label: str, value_html: str) -> str:
+    return (
+        '<tr>'
+        f'<td style="padding:6px 12px 6px 0;color:#718096;font-size:11px;'
+        f'text-transform:uppercase;letter-spacing:0.5px;width:110px;vertical-align:top">'
+        f'{_html_escape(label)}</td>'
+        f'<td style="padding:6px 0;color:#1a202c">{value_html}</td>'
+        '</tr>'
+    )
+
+
+def _format_edit_email(
+    month: str, therapy: str, stage: str, old: str, new: str,
+    is_done: bool, editor: str,
+) -> tuple[str, str]:
+    """Build (subject, html_body) for a single-cell edit notification."""
+    state_label = "✅ Completed" if is_done else "⬜ Pending"
+    state_color = "#38a169" if is_done else "#dd6b20"
+    state_bg = "#f0fff4" if is_done else "#fffaf0"
+
+    bits = []
+    if therapy:
+        bits.append(therapy)
+    if month:
+        bits.append(month)
+    subject = f"[Lupin] {stage or 'Update'} {('completed' if is_done else 'pending')}"
+    if bits:
+        subject += " — " + " / ".join(bits)
+
+    rows_html: list[str] = []
+    if month:
+        rows_html.append(_email_kv("Month", _html_escape(month)))
+    if therapy:
+        rows_html.append(_email_kv("Therapy", f"<b>{_html_escape(therapy)}</b>"))
+    if stage:
+        rows_html.append(_email_kv("Stage", _html_escape(stage)))
+    rows_html.append(_email_kv(
+        "Status",
+        f'<span style="background:{state_bg};color:{state_color};'
+        f'padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600">'
+        f'{_html_escape(state_label)}</span>',
+    ))
+    if old:
+        rows_html.append(_email_kv(
+            "Was",
+            f'<code style="background:#f0f3f7;padding:2px 6px;border-radius:3px">'
+            f'{_html_escape(old)}</code>',
+        ))
+    if new:
+        rows_html.append(_email_kv("Now", f"<b>{_html_escape(new)}</b>"))
+
+    cta = (
+        f'<a href="{_html_escape(DASHBOARD_PUBLIC_URL)}" '
+        'style="display:inline-block;background:#6aa84f;color:#ffffff;'
+        'text-decoration:none;padding:10px 18px;border-radius:4px;'
+        'font-size:13px;font-weight:600">Open dashboard ↗</a>'
+        if DASHBOARD_PUBLIC_URL else ""
+    )
+    foot = (f"Edited by {_html_escape(editor)}" if editor else "") + " — Lupin Tracker"
+
+    html = f"""\
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f5f7fa;padding:24px 0">
+  <tr><td align="center">
+    <table cellpadding="0" cellspacing="0" border="0" width="600" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:14px;color:#1a202c">
+      <tr><td style="padding:20px 24px;border-bottom:3px solid #6aa84f;background:#f8fafc;border-radius:8px 8px 0 0">
+        <div style="font-size:18px;font-weight:700;color:#33691e">🟢 Lupin Tracker — sheet update</div>
+      </td></tr>
+      <tr><td style="padding:20px 24px">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+          {''.join(rows_html)}
+        </table>
+        {('<div style="padding-top:20px">' + cta + '</div>') if cta else ''}
+      </td></tr>
+      <tr><td style="padding:12px 24px;border-top:1px solid #e2e8f0;color:#718096;font-size:11px;background:#f8fafc;border-radius:0 0 8px 8px">
+        {_html_escape(foot)}
+      </td></tr>
+    </table>
+  </td></tr>
+</table>"""
+    return subject, html
+
+
+def _format_weekly_email(data: dict) -> tuple[str, str]:
+    """Build (subject, html_body) for the Monday weekly digest. `data` is
+    the JSON shape returned by _analyze()."""
+    k = data.get("kpi", {})
+    per_stage = data.get("per_stage", [])
+    months = data.get("months", [])
+    progress = int(k.get("progress_pct", 0))
+    done = int(k.get("done_cells", 0))
+    total = int(k.get("total_cells", 0))
+    pending = int(k.get("pending_cells", 0))
+
+    subject = f"[Lupin] Weekly digest — {done}/{total} stages done · {progress}%"
+
+    # 3-up KPI strip: progress / done / pending
+    kpi_strip = f"""
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:20px">
+          <tr>
+            <td style="padding:14px;background:#f0fff4;border-radius:6px;width:33%;text-align:center">
+              <div style="font-size:11px;color:#718096;text-transform:uppercase;letter-spacing:0.5px">Progress</div>
+              <div style="font-size:24px;font-weight:700;color:#38a169;margin-top:4px">{progress}%</div>
+            </td>
+            <td style="width:8px"></td>
+            <td style="padding:14px;background:#f8fafc;border-radius:6px;width:33%;text-align:center">
+              <div style="font-size:11px;color:#718096;text-transform:uppercase;letter-spacing:0.5px">Stages done</div>
+              <div style="font-size:24px;font-weight:700;color:#1a202c;margin-top:4px">{done} / {total}</div>
+            </td>
+            <td style="width:8px"></td>
+            <td style="padding:14px;background:#fffaf0;border-radius:6px;width:33%;text-align:center">
+              <div style="font-size:11px;color:#718096;text-transform:uppercase;letter-spacing:0.5px">Pending</div>
+              <div style="font-size:24px;font-weight:700;color:#dd6b20;margin-top:4px">{pending}</div>
+            </td>
+          </tr>
+        </table>"""
+
+    # Per-stage progress bars
+    stage_rows = ""
+    for s in per_stage:
+        name = s.get("name", "")
+        sdone = int(s.get("done", 0))
+        stotal = int(s.get("total", 0))
+        spct = int(s.get("pct", 0))
+        bar_fill_w = max(1, spct)  # avoid 0px bars when 0%
+        stage_rows += f"""
+          <tr><td style="padding:8px 0">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+              <span style="font-weight:600">{_html_escape(name)}</span>
+              <span style="color:#718096">{sdone}/{stotal} · {spct}%</span>
+            </div>
+            <div style="height:7px;background:#edf2f7;border-radius:4px;overflow:hidden">
+              <div style="height:100%;width:{bar_fill_w}%;background:#6aa84f"></div>
+            </div>
+          </td></tr>"""
+
+    # Month-wise table
+    month_rows = ""
+    for mb in months:
+        mname = mb.get("month", "")
+        mdone = int(mb.get("done", 0))
+        mtotal = int(mb.get("total", 0))
+        mpct = int(mb.get("pct", 0))
+        month_rows += (
+            f'<tr>'
+            f'<td style="padding:7px 8px;border-bottom:1px solid #edf2f7;font-weight:600">{_html_escape(mname)}</td>'
+            f'<td style="padding:7px 8px;border-bottom:1px solid #edf2f7;color:#718096;font-size:12px">{mdone} / {mtotal}</td>'
+            f'<td style="padding:7px 8px;border-bottom:1px solid #edf2f7;text-align:right;color:#6aa84f;font-weight:700">{mpct}%</td>'
+            f'</tr>'
+        )
+
+    cta = (
+        f'<a href="{_html_escape(DASHBOARD_PUBLIC_URL)}" '
+        'style="display:inline-block;background:#6aa84f;color:#ffffff;text-decoration:none;'
+        'padding:10px 18px;border-radius:4px;font-size:13px;font-weight:600">Open dashboard ↗</a>'
+        if DASHBOARD_PUBLIC_URL else ""
+    )
+
+    html = f"""\
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f5f7fa;padding:24px 0">
+  <tr><td align="center">
+    <table cellpadding="0" cellspacing="0" border="0" width="640" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:14px;color:#1a202c">
+      <tr><td style="padding:20px 24px;border-bottom:3px solid #6aa84f;background:#f8fafc;border-radius:8px 8px 0 0">
+        <div style="font-size:18px;font-weight:700;color:#33691e">📊 Weekly digest — Lupin Tracker</div>
+      </td></tr>
+      <tr><td style="padding:20px 24px">
+        {kpi_strip}
+
+        <div style="font-size:13px;font-weight:700;color:#33691e;margin-bottom:8px;border-bottom:1px solid #e2e8f0;padding-bottom:6px">Stage-wise progress</div>
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">{stage_rows}</table>
+
+        <div style="font-size:13px;font-weight:700;color:#33691e;margin:20px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:6px">Month-wise progress</div>
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size:13px">{month_rows}</table>
+
+        {('<div style="padding-top:20px">' + cta + '</div>') if cta else ''}
+      </td></tr>
+      <tr><td style="padding:12px 24px;border-top:1px solid #e2e8f0;color:#718096;font-size:11px;background:#f8fafc;border-radius:0 0 8px 8px">
+        Sent every Monday at 09:00 — Lupin Tracker
+      </td></tr>
+    </table>
+  </td></tr>
+</table>"""
+    return subject, html
+
+
 @app.route("/api/sheet-edit", methods=["POST"])
 def sheet_edit():
-    """Apps Script onEdit calls this. Fans an alert to recipients with
-    notify_on_edit=Yes. Payload carries month/therapy/stage context."""
+    """Apps Script onEdit/onChange calls this. Fans a Telegram DM to every
+    recipient with notify_on_edit=Yes who has a Chat ID, AND emails the
+    same set who additionally have an Email address. Telegram and email
+    are independent — having only one channel still works."""
     body = request.get_json(force=True, silent=True) or {}
     if body.get("password") != TICK_PASSWORD:
         return jsonify({"ok": False, "error": "bad password"}), 401
-    if not TELEGRAM_BOT_TOKEN:
-        return jsonify({"ok": True, "note": "telegram disabled"}), 200
 
     month = body.get("month", "")
     therapy = body.get("therapy", "")
@@ -571,6 +849,7 @@ def sheet_edit():
     is_done = bool(body.get("is_done"))
     editor = body.get("editor", "")
 
+    # Telegram body (HTML parse mode)
     lines = ["<b>✏️ Lupin Tracker update</b>", ""]
     if month:
         lines.append(f"🗓 <b>{_html_escape(month)}</b>")
@@ -588,36 +867,54 @@ def sheet_edit():
     if editor:
         lines.append("")
         lines.append(f"👤 <i>{_html_escape(editor)}</i>")
+    tg_text = "\n".join(lines)
 
-    text = "\n".join(lines)
+    # Email body
+    email_subject, email_html = _format_edit_email(
+        month, therapy, stage, old, new, is_done, editor,
+    )
+
     recips = _recipients()
     notify_list = [r for r in recips if r["notify_on_edit"]]
-    sent = 0
+
+    # Telegram fan-out
+    sent_tg = 0
     tg_error = ""
     for r in notify_list:
-        resp = _tg("sendMessage", chat_id=r["chat_id"], text=text, parse_mode="HTML")
+        if not r["chat_id"] or not TELEGRAM_BOT_TOKEN:
+            continue
+        resp = _tg("sendMessage", chat_id=r["chat_id"], text=tg_text, parse_mode="HTML")
         if resp.get("ok"):
-            sent += 1
+            sent_tg += 1
         elif not tg_error:
-            # Surface why Telegram refused (e.g. 403 = user never /started
-            # this bot, 400 = bad chat id). Truncated, no secrets.
             tg_error = str(resp.get("description") or resp.get("error_code") or resp)[:160]
-    # Full transparency block so the Apps Script log shows exactly what
-    # the Recipients tab looks like to the server — no more guessing.
+
+    # Email fan-out (SMTP path; failures handed to Apps Script MailApp)
+    email_targets = [r["email"] for r in notify_list if r["email"]]
+    sent_email, failed_email = _email(email_targets, email_subject, email_html) \
+        if email_targets else (0, [])
+
+    # Diagnostic dump kept from earlier debugging — harmless and helpful
+    # for verifying the Recipients tab is being read correctly.
     raw = _gviz_csv(TAB_RECIPIENTS)
     headers_seen = raw[0] if raw else []
     recip_dump = [
         {
             "name": r["name"],
             "chat_id_len": len(r["chat_id"]),
-            "chat_id_digits": r["chat_id"].lstrip("-").isdigit(),
+            "chat_id_digits": r["chat_id"].lstrip("-").isdigit() if r["chat_id"] else False,
+            "has_email": bool(r["email"]),
             "notify": r["notify_on_edit"],
         }
         for r in recips
     ]
     return jsonify({
         "ok": True,
-        "sent": sent,
+        "sent_telegram": sent_tg,
+        "sent_email": sent_email,
+        "email_failed_targets": failed_email,
+        "email_subject": email_subject,
+        "email_html": email_html,
         "recipients_total": len(recips),
         "recipients_notify": len(notify_list),
         "headers_seen": headers_seen,
@@ -632,11 +929,11 @@ def weekly():
     pw = (request.get_json(silent=True) or {}).get("password") or request.args.get("password")
     if pw != TICK_PASSWORD:
         return jsonify({"ok": False, "error": "bad password"}), 401
-    if not TELEGRAM_BOT_TOKEN:
-        return jsonify({"ok": True, "note": "telegram disabled"}), 200
 
     d = _analyze()
     k = d["kpi"]
+
+    # Telegram digest (HTML parse mode)
     lines = [
         "<b>📊 Lupin Tracker — Weekly Digest</b>",
         "",
@@ -655,15 +952,33 @@ def weekly():
     for st in d["per_stage"]:
         lines.append(f"• {_html_escape(st['name'])}: <b>{st['pct']}%</b> "
                      f"({st['done']}/{st['total']})")
+    tg_text = "\n".join(lines)
 
-    text = "\n".join(lines)
-    sent = 0
-    for r in _recipients():
-        if not r["weekly_digest"]:
+    # Email digest (rich HTML body, same content)
+    email_subject, email_html = _format_weekly_email(d)
+
+    recips = _recipients()
+    digest_list = [r for r in recips if r["weekly_digest"]]
+
+    sent_tg = 0
+    for r in digest_list:
+        if not r["chat_id"] or not TELEGRAM_BOT_TOKEN:
             continue
-        if _tg("sendMessage", chat_id=r["chat_id"], text=text, parse_mode="HTML").get("ok"):
-            sent += 1
-    return jsonify({"ok": True, "sent": sent})
+        if _tg("sendMessage", chat_id=r["chat_id"], text=tg_text, parse_mode="HTML").get("ok"):
+            sent_tg += 1
+
+    email_targets = [r["email"] for r in digest_list if r["email"]]
+    sent_email, failed_email = _email(email_targets, email_subject, email_html) \
+        if email_targets else (0, [])
+
+    return jsonify({
+        "ok": True,
+        "sent_telegram": sent_tg,
+        "sent_email": sent_email,
+        "email_failed_targets": failed_email,
+        "email_subject": email_subject,
+        "email_html": email_html,
+    })
 
 
 @app.route("/api/telegram", methods=["POST"])

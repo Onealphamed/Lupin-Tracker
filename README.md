@@ -14,6 +14,9 @@ an empty / uncoloured cell is *pending*. Exactly two states — that's it.
 - Live iframe mirror of the actual sheet (true colours)
 - Telegram bot: alerts on every sheet edit **including colour-only changes**
   (painting a cell green) + a Monday 9 AM weekly digest
+- Email alerts on the same events: per-edit notification + weekly digest in
+  inline-styled HTML (delivered via Apps Script `MailApp` — uses the
+  spreadsheet owner's Google account, so no SMTP creds are required)
 
 The Google Sheet is the **single source of truth**. The dashboard reads it live; the
 bot fires on edits.
@@ -99,6 +102,22 @@ Open the sheet → **Share** → "Anyone with the link" → **Viewer**.
 ### Verify
 - Visit the Render URL, log in. Open `…/api/diag?password=<TICK_PASSWORD>` — it
   should report `probe_ok: true` and `probe_has_backgrounds: true`.
+
+### Adding email recipients
+The **Recipients** tab now has an **Email** column alongside Chat ID. A row is
+kept if it has *either* a Chat ID (for Telegram) *or* an Email (for SMTP/MailApp),
+or both. The same `Notify on edit?` / `Weekly digest?` toggles govern both
+channels — so to email someone the per-edit alert, set their email and tick
+`Yes` in `Notify on edit?`.
+
+Emails are delivered through Apps Script `MailApp.sendEmail` (it uses *your*
+Google account — no SMTP creds, no App Password needed). Daily quota: 100
+recipients/day on consumer Gmail, 1500 on Google Workspace — well beyond a
+tracker's needs.
+
+If you ever upgrade to a paid Render plan (outbound SMTP unblocked), fill in
+`SMTP_USER` + `SMTP_PASSWORD` (Gmail App Password) and the backend will send
+directly via SMTP; MailApp only kicks in for addresses SMTP couldn't reach.
 
 ---
 
