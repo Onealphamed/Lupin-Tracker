@@ -5,12 +5,31 @@
 <title>Lupin Tracker</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-  :root {
+  /* Dark theme (default) — applied via :root and explicitly when
+     html[data-theme="dark"]. Light theme overrides follow. The toggle
+     in the topbar flips data-theme; the choice is persisted in
+     localStorage and respects prefers-color-scheme on first visit. */
+  :root, html[data-theme="dark"] {
     --bg:#0f1419; --panel:#1a1f29; --panel-2:#232a36; --border:#2d3441;
     --text:#e4e7ed; --text-dim:#8c96a8; --accent:#7cb342;
     --done:#4caf50; --done-soft:rgba(76,175,80,0.16);
     --pending:#3a4250; --warn:#ffb74d; --bad:#ef5350;
+    --bucket-text:#a5d6a7;
+    --bucket-bg:rgba(124,179,66,.14);
+    --bucket-border:rgba(124,179,66,.35);
+    --modal-overlay:rgba(0,0,0,.6);
     --shadow:0 4px 20px rgba(0,0,0,0.25);
+  }
+  html[data-theme="light"] {
+    --bg:#f5f7fa; --panel:#ffffff; --panel-2:#f0f3f7; --border:#e2e8f0;
+    --text:#1a202c; --text-dim:#5b6370; --accent:#6aa84f;
+    --done:#38a169; --done-soft:rgba(56,161,105,.14);
+    --pending:#cbd5e0; --warn:#dd6b20; --bad:#c53030;
+    --bucket-text:#2f855a;
+    --bucket-bg:rgba(56,161,105,.10);
+    --bucket-border:rgba(56,161,105,.35);
+    --modal-overlay:rgba(15,20,30,.45);
+    --shadow:0 4px 18px rgba(0,0,0,0.07);
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);
@@ -69,7 +88,7 @@
 
   /* Drilldown modal — opens when you click a Done/Pending tile. Lists
      the items grouped by month with therapy / stage / value / comment. */
-  .dd-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);
+  .dd-overlay{display:none;position:fixed;inset:0;background:var(--modal-overlay);
     z-index:50;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}
   .dd-overlay.open{display:flex}
   .dd-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
@@ -140,8 +159,8 @@
     min-width:74px;padding:5px 8px;border-radius:6px;font-size:11px;
     border:1px solid var(--border);cursor:pointer;transition:transform .1s}
   .cell:hover{transform:translateY(-1px)}
-  .cell.done{background:var(--done-soft);border-color:rgba(76,175,80,.5);
-    color:#a5d6a7;font-weight:600}
+  .cell.done{background:var(--done-soft);border-color:var(--bucket-border);
+    color:var(--bucket-text);font-weight:600}
   .cell.pending{background:transparent;color:var(--text-dim)}
   .cell .tick{margin-right:5px;font-size:11px}
   .comment{color:var(--text-dim);font-size:11.5px;font-style:italic;
@@ -149,7 +168,7 @@
   .pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
   .pill{font-size:10px;padding:2px 8px;border-radius:10px;
     background:var(--border);color:var(--text-dim)}
-  .pill.done{background:var(--done-soft);color:#a5d6a7}
+  .pill.done{background:var(--done-soft);color:var(--bucket-text)}
 
   .iframe-wrap{position:relative;height:560px;background:#fff;border-radius:6px;overflow:hidden}
   .iframe-wrap iframe{width:100%;height:100%;border:0}
@@ -169,7 +188,7 @@
   table.toc-table .toc-sub{display:block;color:var(--text-dim);font-size:11.5px;
     font-style:italic;margin-top:3px}
   .bucket-pill{display:inline-block;padding:3px 10px;border-radius:11px;font-size:11px;
-    background:rgba(124,179,66,.14);color:#a5d6a7;border:1px solid rgba(124,179,66,.35);
+    background:var(--bucket-bg);color:var(--bucket-text);border:1px solid var(--bucket-border);
     white-space:normal;line-height:1.3}
   .empty-state{padding:40px;text-align:center;color:var(--text-dim);font-size:13px}
   .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
@@ -181,7 +200,26 @@
   .btn:hover{background:rgba(124,179,66,.1)}
   .legend{font-size:11px;color:var(--text-dim);display:flex;gap:16px;align-items:center}
   .legend i{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+
+  /* Theme toggle in the topbar. Sits next to the Logout link. */
+  .theme-toggle{background:transparent;border:1px solid var(--border);color:var(--text);
+    width:34px;height:34px;border-radius:8px;cursor:pointer;font-size:16px;line-height:1;
+    margin-left:14px;padding:0;transition:background .15s,border-color .15s}
+  .theme-toggle:hover{background:var(--panel-2);border-color:var(--accent)}
 </style>
+<!-- Apply the saved theme BEFORE the body renders so the page never flashes
+     dark on a light-theme user (or vice-versa). Reads localStorage; falls
+     back to prefers-color-scheme; defaults to dark. The actual toggle
+     logic lives near the bottom of the page. -->
+<script>
+(function(){try{
+  var t = localStorage.getItem("lupin-theme");
+  if(!t) t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", t);
+}catch(e){
+  document.documentElement.setAttribute("data-theme","dark");
+}})();
+</script>
 </head>
 <body>
 
@@ -191,6 +229,8 @@
     <span class="refresh-dot"></span><span id="last-updated">Loading…</span>
     <a href="{{ sheet_url }}" target="_blank">Open Sheet ↗</a>
     <a href="/logout">Logout</a>
+    <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()"
+      title="Toggle light / dark theme" aria-label="Toggle theme">🌙</button>
   </div>
 </div>
 
@@ -628,6 +668,26 @@ const DATA_TAB = {{ data_tab | tojson }};
 const iframe = document.getElementById("sheet-iframe");
 if(APPS_SCRIPT_URL){ iframe.src = APPS_SCRIPT_URL + "?tab=" + encodeURIComponent(DATA_TAB); }
 else { iframe.srcdoc = '<div style="padding:40px;font-family:Arial">APPS_SCRIPT_URL not configured on the server.</div>'; }
+
+// Theme toggle. The initial data-theme attribute is set by the inline
+// script in <head> (so the page never flashes the wrong theme); this
+// piece updates the icon to match and handles user clicks. State
+// persists in localStorage under "lupin-theme".
+function _updateThemeIcon(){
+  var btn = document.getElementById("theme-toggle");
+  if(!btn) return;
+  var t = document.documentElement.getAttribute("data-theme") || "dark";
+  btn.textContent = t === "dark" ? "☀️" : "🌙"; // icon shows the OTHER theme
+  btn.title = "Switch to " + (t === "dark" ? "light" : "dark") + " theme";
+}
+function toggleTheme(){
+  var cur = document.documentElement.getAttribute("data-theme") || "dark";
+  var next = cur === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("lupin-theme", next); } catch(e) {}
+  _updateThemeIcon();
+}
+_updateThemeIcon();
 
 refresh();
 setInterval(refresh, 60000);
