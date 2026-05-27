@@ -198,8 +198,24 @@
   .btn{background:var(--panel-2);border:1px solid var(--border);color:var(--text);
     padding:6px 13px;border-radius:6px;font-size:11.5px;cursor:pointer}
   .btn:hover{background:rgba(124,179,66,.1)}
-  .legend{font-size:11px;color:var(--text-dim);display:flex;gap:16px;align-items:center}
+  .legend{font-size:11px;color:var(--text-dim);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
   .legend i{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+  .legend i.row-blink{border-radius:50%;width:9px;height:9px}
+
+  /* Per-row pending indicator. One pulsing dot per side that still owes
+     stages on that line: cyan = OAM (TOC Shared / Design Plan / CRD
+     Upload), coral = Lupin (TOC Approved). Colors match the owner KPI
+     cards above so the visual link is obvious. Title attribute on each
+     dot lists exactly which stages are still pending on hover. */
+  .row-blink-wrap{display:inline-flex;gap:5px;margin-right:8px;vertical-align:middle}
+  .row-blink{display:inline-block;width:9px;height:9px;border-radius:50%;
+    animation:rowpulse 1.3s ease-in-out infinite}
+  .row-blink.oam{background:#4fc3f7;box-shadow:0 0 8px rgba(79,195,247,.7)}
+  .row-blink.lupin{background:#ff9e80;box-shadow:0 0 8px rgba(255,158,128,.7)}
+  @keyframes rowpulse{
+    0%,100%{transform:scale(1);opacity:1}
+    50%   {transform:scale(.55);opacity:.4}
+  }
 
   /* Theme toggle in the topbar. Sits next to the Logout link. */
   .theme-toggle{background:transparent;border:1px solid var(--border);color:var(--text);
@@ -261,6 +277,8 @@
     <span class="legend">
       <span><i style="background:var(--done-soft);border:1px solid rgba(76,175,80,.5)"></i>Completed (green)</span>
       <span><i style="background:transparent;border:1px solid var(--border)"></i>Pending</span>
+      <span><i class="row-blink oam"></i>OAM pending on this row</span>
+      <span><i class="row-blink lupin"></i>Lupin pending on this row</span>
     </span>
   </div>
 
@@ -520,6 +538,27 @@ function renderStageBars(per){
 
 function query(){return (document.getElementById("search").value||"").toLowerCase().trim();}
 
+// Per-row pending indicators. Returns 0–2 pulsing dots prepended to the
+// rowname: one for OAM (TOC Shared / Design Plan / CRD Upload still
+// pending), one for Lupin (TOC Approved still pending). Title attribute
+// names exactly which stages are owed so a hover reads like
+// "OAM pending: Design Plan, CRD Upload".
+function rowBlinkers(g){
+  const oam = [], lupin = [];
+  for(const s of (g.stages||[])){
+    if(s.done) continue;
+    const owner = STAGE_OWNERS[s.name];
+    if(owner === "OAM") oam.push(s.name);
+    else if(owner === "Lupin") lupin.push(s.name);
+  }
+  const parts = [];
+  if(oam.length) parts.push(
+    `<span class="row-blink oam" title="OAM pending: ${esc(oam.join(", "))}"></span>`);
+  if(lupin.length) parts.push(
+    `<span class="row-blink lupin" title="Lupin pending: ${esc(lupin.join(", "))}"></span>`);
+  return parts.length ? `<span class="row-blink-wrap">${parts.join("")}</span>` : "";
+}
+
 // Month-wise: one collapsible group per month, with a therapy × stage matrix.
 function renderMonthView(d){
   const q = query();
@@ -539,7 +578,7 @@ function renderMonthView(d){
     const stageHead = STAGES.map(s=>`<th>${esc(s)}</th>`).join("");
     const body = rows.map(g=>{
       const cells = g.stages.map(s=>cellHtml(s, g)).join("");
-      return `<tr><td class="rowname">${esc(g.therapy)}</td>${cells}
+      return `<tr><td class="rowname">${rowBlinkers(g)}${esc(g.therapy)}</td>${cells}
         <td class="comment">${esc(g.comment||"")}</td></tr>`;
     }).join("");
     const open = (idx===0 || q) ? "open" : "";
@@ -587,7 +626,7 @@ function _renderTherapyLike(d, containerId, accept, icon, emptyLabel){
     const stageHead = STAGES.map(s=>`<th>${esc(s)}</th>`).join("");
     const body = rows.map(g=>{
       const cells = g.stages.map(s=>cellHtml(s, g)).join("");
-      return `<tr><td class="rowname">${esc(g.month)}</td>${cells}
+      return `<tr><td class="rowname">${rowBlinkers(g)}${esc(g.month)}</td>${cells}
         <td class="comment">${esc(g.comment||"")}</td></tr>`;
     }).join("");
     const open = (idx===0 || q) ? "open" : "";
