@@ -277,8 +277,8 @@
     <span class="legend">
       <span><i style="background:var(--done-soft);border:1px solid rgba(76,175,80,.5)"></i>Completed (green)</span>
       <span><i style="background:transparent;border:1px solid var(--border)"></i>Pending</span>
-      <span><i class="row-blink oam"></i>OAM pending on this row</span>
-      <span><i class="row-blink lupin"></i>Lupin pending on this row</span>
+      <span><i class="row-blink oam"></i>OAM is the current blocker</span>
+      <span><i class="row-blink lupin"></i>Lupin is the current blocker</span>
     </span>
   </div>
 
@@ -538,25 +538,27 @@ function renderStageBars(per){
 
 function query(){return (document.getElementById("search").value||"").toLowerCase().trim();}
 
-// Per-row pending indicators. Returns 0–2 pulsing dots prepended to the
-// rowname: one for OAM (TOC Shared / Design Plan / CRD Upload still
-// pending), one for Lupin (TOC Approved still pending). Title attribute
-// names exactly which stages are owed so a hover reads like
-// "OAM pending: Design Plan, CRD Upload".
+// Per-row pending indicator (chain model). The four stages are a
+// sequence — TOC Shared → TOC Approved → Design Plan → CRD Upload —
+// each waiting on the previous. The TRUE blocker on a row is the FIRST
+// pending stage in that order; stages pending after it are just
+// waiting, not "owed" by their owner. So at most ONE dot is shown,
+// colored for whoever owns the first pending stage. (No dot at all if
+// the whole row is done.)
+//
+// Example: row with TOC Shared ✓, TOC Approved pending, Design Plan
+// pending, CRD Upload pending → only the Lupin dot shows (TOC Approved
+// is the first pending stage, and Lupin owns it).
 function rowBlinkers(g){
-  const oam = [], lupin = [];
   for(const s of (g.stages||[])){
     if(s.done) continue;
     const owner = STAGE_OWNERS[s.name];
-    if(owner === "OAM") oam.push(s.name);
-    else if(owner === "Lupin") lupin.push(s.name);
+    if(!owner) return "";
+    const cls = owner === "OAM" ? "oam" : "lupin";
+    return `<span class="row-blink-wrap"><span class="row-blink ${cls}" `
+         + `title="${esc(owner)} blocker — next up: ${esc(s.name)}"></span></span>`;
   }
-  const parts = [];
-  if(oam.length) parts.push(
-    `<span class="row-blink oam" title="OAM pending: ${esc(oam.join(", "))}"></span>`);
-  if(lupin.length) parts.push(
-    `<span class="row-blink lupin" title="Lupin pending: ${esc(lupin.join(", "))}"></span>`);
-  return parts.length ? `<span class="row-blink-wrap">${parts.join("")}</span>` : "";
+  return "";
 }
 
 // Month-wise: one collapsible group per month, with a therapy × stage matrix.
