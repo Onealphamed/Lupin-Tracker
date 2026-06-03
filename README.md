@@ -144,3 +144,59 @@ dashboard and the sheet always agree.
 
 Clicking a cell on the dashboard calls `/api/tick`, which asks Apps Script to
 paint the cell green (stamping today's date if empty) or clear it.
+
+The green-detection rule (`green ≥ 60`, `g − r ≥ 8`, `g − b ≥ 8`, not near-white)
+lives in two places that must stay in sync: `lupin/colors.py:is_green` and
+`google_apps_script.js:_isGreen`. The threshold is the same in both.
+
+---
+
+## Project layout
+
+The code is split by feature so changes to one area don't affect another.
+
+```
+Lupin-Tracker/
+├── app.py                       # thin entry: app = create_app()
+├── lupin/                       # Flask package
+│   ├── __init__.py              # create_app() factory + blueprint wiring
+│   ├── config.py                # all env vars
+│   ├── colors.py                # green-cell detector (pure functions)
+│   ├── sheets.py                # gviz CSV + Apps Script proxy
+│   ├── recipients.py            # Recipients tab reader (fuzzy columns)
+│   ├── analytics.py             # /api/analytics + analyze()
+│   ├── tocbank.py               # /api/toc-bank
+│   ├── telegram_client.py       # _tg() + /api/telegram webhook
+│   ├── email_client.py          # SMTP send + HTML body formatters
+│   ├── notifications.py         # /api/sheet-edit + /api/weekly
+│   ├── auth.py                  # /login + /logout + login_required
+│   └── core.py                  # /, /healthz, /api/tick, /iframe, /api/diag
+├── static/
+│   ├── css/dashboard.css        # all styles (themes + components)
+│   └── js/
+│       ├── util.js              # esc(), query()
+│       ├── theme.js             # light/dark toggle
+│       ├── analytics.js         # KPI tiles, owner cards, drilldown modal
+│       ├── matrix-views.js      # month/therapy/non-therapy + cell toggle + blinker
+│       ├── tocbank.js           # TOC Bank view
+│       └── app.js               # refresh orchestrator + tabs + search
+├── templates/
+│   ├── index.html               # dashboard markup (no inline CSS/JS)
+│   └── login.html               # password gate
+└── google_apps_script.js        # single paste file (matches Apps Script editor)
+```
+
+**Why each thing lives where it does:**
+- Each backend module is a Flask Blueprint registered in `create_app()`. Want to
+  add a new endpoint? Create a new module, expose a Blueprint, register it. Want
+  to change Telegram behaviour? Only `telegram_client.py` and `notifications.py`
+  are involved — analytics, TOC bank, login, sheets are untouched.
+- The JS files are loaded in dependency order in `index.html` (util → theme →
+  analytics → matrix-views → tocbank → app). Each one only touches the DOM nodes
+  it owns; you can rewrite `tocbank.js` without breaking the month-wise view.
+- Jinja-templated values reach JS via a tiny `window.LUPIN_BOOT` block in the
+  HTML — the static `.js` files stay pure JavaScript (Flask serves them as-is,
+  no Jinja parsing) so they're cacheable and lintable.
+- `google_apps_script.js` stays a single file by design: Google's Apps Script
+  editor expects one paste per project. Splitting it would mean more pasting
+  for you on every update, with no benefit.
