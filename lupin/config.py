@@ -32,7 +32,7 @@ TAB_RECIPIENTS = "Recipients"
 TAB_TOC = _env("TOC_TAB", "TOC Bank")
 
 # ──────────── Auth ────────────
-DASHBOARD_PASSWORD = _env("DASHBOARD_PASSWORD", "Alphamed@4321")
+DASHBOARD_PASSWORD = _env("DASHBOARD_PASSWORD", "CHANGE_ME")
 # Shared secret between Flask and the Apps Script — must match the
 # PASSWORD constant inside google_apps_script.js exactly. Defaults to
 # the dashboard password so a single env var suffices for the common

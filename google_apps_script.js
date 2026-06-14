@@ -32,8 +32,8 @@
 // e.g. "https://lupin-tracker.onrender.com"
 const DASHBOARD_URL = "REPLACE_WITH_RENDER_URL";
 
-// Must match TICK_PASSWORD in the Render env vars.
-const PASSWORD = "Alphamed@4321";
+// Must match TICK_PASSWORD in the Render env vars. Set your own secret here.
+const PASSWORD = "CHANGE_ME";
 
 // Name of the main data tab. If the script can't find it, it falls back
 // to the first sheet in the spreadsheet, so this rarely needs editing.
