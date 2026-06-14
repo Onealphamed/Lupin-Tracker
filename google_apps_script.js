@@ -1,83 +1,43 @@
 /**
- * Lupin Tracker — Google Apps Script
+ * Lupin Tracker — Weekly Digest (SERVER-LESS)
  *
- * Paste this entire file into the sheet's Apps Script editor
- * (Extensions → Apps Script), Save, reload the sheet, then run `setup()`
- * once from the "Lupin Tracker" menu.
+ * Self-contained Google Apps Script. The Flask backend on Render is gone
+ * (the dashboard is now a static site), so this script no longer talks to
+ * any server — it reads the sheet directly (values + green fills), builds
+ * the digest, and emails it via MailApp using the spreadsheet owner's own
+ * Google account. No SMTP creds, no API, no DASHBOARD_URL.
  *
- * Unlike the Zydus tracker there is NO Status column. A stage cell counts
- * as DONE only when its background is green. This script is what lets the
- * dashboard see that — gviz CSV cannot read cell colours, so the backend
- * calls action=read_grid here to get values AND backgrounds together.
+ * Setup (one time):
+ *   1. Extensions → Apps Script. Delete everything, paste THIS file, Save.
+ *   2. Reload the sheet → a "Lupin Digest" menu appears.
+ *   3. Menu → "📅 Install Friday 7:30 PM trigger" (authorise when asked).
+ *   4. Menu → "📨 Send digest now" to test — check your inbox.
  *
- * It does:
- *   1. seedRecipients()  – creates the Recipients tab (run once).
- *   2. doGet(e)          – styled HTML mirror of the data tab (full colour)
- *                          for the dashboard iframe.
- *   3. doPost(e)         – actions from Flask:
- *                            read_grid          → values + backgrounds
- *                            set_cell_done      → toggle a cell green/clear
- *                            register_recipient → add a Telegram chat
- *   4. onEditHook(e)     – installable onEdit; POSTs month/therapy/stage
- *                          context to /api/sheet-edit on VALUE edits.
- *   4b. onChangeHook(e)  – installable onChange (FORMAT); same fan-out for
- *                          COLOUR-only edits (painting a cell green), which
- *                          onEdit cannot see.
- *   5. weeklyDigest()    – Monday 9 AM; hits /api/weekly.
+ * Recipients: the "Recipients" tab, any row with Weekly digest? = Yes and
+ * an Email. If none are set, it falls back to the sheet owner's email.
  */
 
 // ───────────────────────────── config ─────────────────────────────
-
-// PASTE YOUR RENDER URL HERE after deploying the Flask app.
-// e.g. "https://lupin-tracker.onrender.com"
-const DASHBOARD_URL = "REPLACE_WITH_RENDER_URL";
-
-// Must match TICK_PASSWORD in the Render env vars. Set your own secret here.
-const PASSWORD = "CHANGE_ME";
-
-// Name of the main data tab. If the script can't find it, it falls back
-// to the first sheet in the spreadsheet, so this rarely needs editing.
-const TAB_DATA = "Tracker";
+const TAB_DATA = "Tracker";              // falls back to the first non-Recipients sheet
 const TAB_RECIPIENTS = "Recipients";
-
-// The green used when you (or the dashboard) mark a cell done.
-const DONE_GREEN = "#b6d7a8";
+const DASHBOARD_URL = "https://lupin-tracker-1.onrender.com";  // live static dashboard (for the email button)
 
 // ───────────────────────────── menu ─────────────────────────────
-
 function onOpen() {
   SpreadsheetApp.getUi()
-    .createMenu("Lupin Tracker")
-    .addItem("🌱 Create Recipients tab (run once)", "seedRecipients")
+    .createMenu("Lupin Digest")
+    .addItem("📨 Send digest now (test)", "weeklyDigestNow")
     .addSeparator()
-    .addItem("⚙️ Install triggers (onEdit + weekly)", "installTriggers")
+    .addItem("📅 Install Friday 7:30 PM trigger", "installDigestTrigger")
     .addItem("🛑 Remove all triggers", "removeAllTriggers")
-    .addSeparator()
-    .addItem("📨 Send weekly digest now", "weeklyDigestNow")
-    .addItem("🔌 Test backend connection", "testConnection")
     .addToUi();
 }
 
-function setup() {
-  onOpen();
-  seedRecipients();
-  installTriggers();
-  SpreadsheetApp.getUi().alert(
-    "Setup complete. Now deploy this script as a Web App " +
-    "(Deploy → New deployment → Web app → Execute as: Me, Access: Anyone) " +
-    "and paste the /exec URL into Render as APPS_SCRIPT_URL."
-  );
-}
-
 // ──────────────────────── data tab resolver ────────────────────────
-
-function _dataSheet(name) {
+function _dataSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sh = ss.getSheetByName(name || TAB_DATA);
+  let sh = ss.getSheetByName(TAB_DATA);
   if (sh) return sh;
-  sh = ss.getSheetByName(TAB_DATA);
-  if (sh) return sh;
-  // Fall back to the first non-Recipients sheet.
   const all = ss.getSheets();
   for (let i = 0; i < all.length; i++) {
     if (all[i].getName() !== TAB_RECIPIENTS) return all[i];
@@ -85,163 +45,7 @@ function _dataSheet(name) {
   return all[0] || null;
 }
 
-// ──────────────────────── seed Recipients ────────────────────────
-
-function seedRecipients() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let recip = ss.getSheetByName(TAB_RECIPIENTS);
-  if (!recip) recip = ss.insertSheet(TAB_RECIPIENTS);
-  if (recip.getLastRow() === 0) {
-    // Email column lets a recipient receive notifications by email even
-    // without a Telegram Chat ID. _recipients() on the Flask side keeps
-    // a row if EITHER channel is present.
-    const headers = ["Name", "Role", "Chat ID", "Email", "Notify on edit?", "Weekly digest?", "Notes"];
-    recip.getRange(1, 1, 1, headers.length).setValues([headers])
-      .setFontWeight("bold").setBackground("#6aa84f").setFontColor("#fff");
-    recip.appendRow(["(Auto-filled when you /start the Telegram bot)", "Brand Manager", "", "", "Yes", "Yes", ""]);
-    recip.setFrozenRows(1);
-    const yn = SpreadsheetApp.newDataValidation().requireValueInList(["Yes", "No"], true).build();
-    // Yes/No dropdowns shift by one column now that Email sits at col 4.
-    recip.getRange(2, 5, 1000, 1).setDataValidation(yn);  // Notify on edit?
-    recip.getRange(2, 6, 1000, 1).setDataValidation(yn);  // Weekly digest?
-  }
-  SpreadsheetApp.getUi().alert(
-    "Recipients tab ready.\n\n" +
-    "Add a Chat ID for Telegram, an Email for email, or both. " +
-    "Existing tabs without an Email column: just insert one and the " +
-    "dashboard picks it up automatically (column match is fuzzy)."
-  );
-}
-
-// ───────────────────────── doGet: iframe HTML ─────────────────────────
-
-function doGet(e) {
-  const tab = (e && e.parameter && e.parameter.tab) || TAB_DATA;
-  const sheet = _dataSheet(tab);
-  if (!sheet) {
-    return HtmlService.createHtmlOutput('<div style="padding:40px;font-family:Arial">Sheet not found</div>')
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-  }
-  const lastRow = sheet.getLastRow();
-  const lastCol = sheet.getLastColumn();
-  if (!lastRow || !lastCol) {
-    return HtmlService.createHtmlOutput('<div style="padding:40px;font-family:Arial">Empty sheet</div>')
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-  }
-  const range = sheet.getRange(1, 1, lastRow, lastCol);
-  const values = range.getDisplayValues();
-  const bg = range.getBackgrounds();
-  const fw = range.getFontWeights();
-
-  let html = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>';
-  html += 'html,body{margin:0;padding:0;font-family:arial,sans-serif;font-size:10pt;color:#000;background:#fff}';
-  html += 'table{border-collapse:collapse;background:#fff;width:100%}';
-  html += 'td{border:1px solid #d0d0d0;padding:3px 8px;white-space:nowrap}';
-  html += 'tr:first-child td{background:#6aa84f;color:#fff;font-weight:bold;position:sticky;top:0;z-index:2}';
-  html += '</style></head><body><table>';
-  for (let r = 0; r < values.length; r++) {
-    html += "<tr>";
-    for (let c = 0; c < values[r].length; c++) {
-      let v = String(values[r][c] || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      let style = "";
-      if (r > 0 && bg[r][c] && bg[r][c] !== "#ffffff") style += "background:" + bg[r][c] + ";";
-      if (fw[r][c] === "bold" && r > 0) style += "font-weight:bold;";
-      html += '<td style="' + style + '">' + v + "</td>";
-    }
-    html += "</tr>";
-  }
-  html += "</table></body></html>";
-  return HtmlService.createHtmlOutput(html)
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
-    .setTitle("Lupin Tracker");
-}
-
-// ───────────────────────── doPost: actions from Flask ─────────────────────────
-
-function doPost(e) {
-  let body = {};
-  try { body = JSON.parse(e.postData.contents); } catch (err) {}
-  if (body.password !== PASSWORD) {
-    return _json({ ok: false, error: "bad password" });
-  }
-  try {
-    if (body.action === "read_grid") return _actionReadGrid(body);
-    if (body.action === "set_cell_done") return _actionSetCellDone(body);
-    if (body.action === "register_recipient") return _actionRegisterRecipient(body);
-    return _json({ ok: false, error: "unknown action" });
-  } catch (err) {
-    return _json({ ok: false, error: String(err) });
-  }
-}
-
-// Values + backgrounds for the whole data tab. This is the call that
-// lets the dashboard see green = done.
-function _actionReadGrid(body) {
-  const sheet = _dataSheet(body.tab);
-  if (!sheet) return _json({ ok: false, error: "data tab not found" });
-  const lastRow = sheet.getLastRow();
-  const lastCol = sheet.getLastColumn();
-  if (!lastRow || !lastCol) return _json({ ok: true, headers: [], rows: [], backgrounds: [] });
-  const range = sheet.getRange(1, 1, lastRow, lastCol);
-  const values = range.getDisplayValues();
-  const bg = range.getBackgrounds(); // includes header row; row 0 = headers
-  return _json({
-    ok: true,
-    headers: values[0],
-    rows: values.slice(1),
-    backgrounds: bg.slice(1), // align with rows (data only)
-  });
-}
-
-// Toggle a single stage cell. When marking done: paint it green and, if
-// empty, stamp today's date. When clearing: remove the fill and the date.
-// `row` / `col` are 1-based DATA coordinates (row 1 = first data row, i.e.
-// sheet row 2 since the header is row 1).
-function _actionSetCellDone(body) {
-  const sheet = _dataSheet(body.tab);
-  if (!sheet) return _json({ ok: false, error: "data tab not found" });
-  const sheetRow = Number(body.row) + 1; // +1 to skip header
-  const sheetCol = Number(body.col);
-  if (!sheetRow || !sheetCol) return _json({ ok: false, error: "bad row/col" });
-  const cell = sheet.getRange(sheetRow, sheetCol);
-  if (body.done) {
-    cell.setBackground(DONE_GREEN);
-    if (!String(cell.getValue() || "").trim()) {
-      cell.setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd-MM-yyyy"));
-    }
-  } else {
-    cell.setBackground(null);
-    cell.clearContent();
-  }
-  return _json({ ok: true });
-}
-
-function _actionRegisterRecipient(body) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(TAB_RECIPIENTS);
-  if (!sheet) return _json({ ok: false, error: "Recipients tab missing" });
-  const chatId = String(body.chat_id || "");
-  const name = String(body.name || "Unknown");
-  const last = sheet.getLastRow();
-  if (last > 1) {
-    const data = sheet.getRange(2, 1, last - 1, sheet.getLastColumn()).getValues();
-    for (let i = 0; i < data.length; i++) {
-      if (String(data[i][2]) === chatId) return _json({ ok: true, already: true });
-    }
-  }
-  // Layout: Name | Role | Chat ID | Email | Notify on edit? | Weekly digest? | Notes
-  // Older tabs without an Email column will get an extra cell harmlessly
-  // appended past the last column — Flask reads by fuzzy header match.
-  sheet.appendRow([name, "Team", chatId, "", "Yes", "Yes", "Auto-registered " + new Date().toISOString()]);
-  return _json({ ok: true });
-}
-
-function _json(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
-}
-
-// ───────────────────────── colour helper ─────────────────────────
-
+// ───────────────────────── green detector ─────────────────────────
 function _isGreen(hex) {
   if (!hex) return false;
   let h = String(hex).trim().replace(/^#/, "");
@@ -254,251 +58,190 @@ function _isGreen(hex) {
   return g >= 60 && (g - r) >= 8 && (g - b) >= 8;
 }
 
-// ───────────────────────── notify helper ─────────────────────────
+// ───────────────────────── analytics (live, green-based) ─────────────────────────
+function analyzeSheet() {
+  const sheet = _dataSheet();
+  if (!sheet) throw new Error("Data tab not found");
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  const rng = sheet.getRange(1, 1, lastRow, lastCol);
+  const vals = rng.getDisplayValues();
+  const bg = rng.getBackgrounds();
+  const headers = vals[0];
 
-// Build month/therapy/stage context for a single cell and POST it to the
-// Flask /api/sheet-edit webhook. Shared by onEditHook (value edits) and
-// onChangeHook (colour-only edits).
-function _notifyCell(sheet, row, col, oldValue, newValue) {
-  if (row === 1) { Logger.log("skip: header row"); return; }
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
-  const header = headers[col - 1] || "";
-
-  // Locate Month, Therapy and the stage columns by fuzzy header match.
+  // locate columns (fuzzy)
   let monthCol = -1, therapyCol = -1, commentCol = -1;
   for (let i = 0; i < headers.length; i++) {
-    const hs = String(headers[i]).toLowerCase();
-    if (monthCol < 0 && hs.indexOf("month") >= 0) monthCol = i + 1;
-    else if (therapyCol < 0 && hs.indexOf("therap") >= 0) therapyCol = i + 1;
-    if (hs.indexOf("comment") >= 0 || hs.indexOf("remark") >= 0) commentCol = i + 1;
+    const hs = String(headers[i] || "").toLowerCase();
+    if (monthCol < 0 && hs.indexOf("month") >= 0) monthCol = i;
+    else if (therapyCol < 0 && hs.indexOf("therap") >= 0) therapyCol = i;
+    if (hs.indexOf("comment") >= 0 || hs.indexOf("remark") >= 0 || hs.indexOf("note") >= 0) commentCol = i;
+  }
+  const stageCols = [], stageNames = [];
+  const end = commentCol >= 0 ? commentCol : headers.length;
+  for (let i = therapyCol + 1; i < end; i++) {
+    if (String(headers[i] || "").trim()) { stageCols.push(i); stageNames.push(String(headers[i]).trim()); }
   }
 
-  // Only the four stage columns are worth a colour alert (between
-  // Therapies and Comments, header non-empty). Skip Month/Therapy/blank.
-  const stageStart = therapyCol > 0 ? therapyCol + 1 : 0;
-  const stageEnd = commentCol > 0 ? commentCol : headers.length + 1;
-  const isStageCol = col > stageStart && col < stageEnd && String(header).trim() !== "";
-  Logger.log("cell r%s c%s header='%s' stageStart=%s stageEnd=%s isStageCol=%s",
-             row, col, header, stageStart, stageEnd, isStageCol);
-  if (!isStageCol) { Logger.log("skip: not a stage column"); return; }
+  const perStage = stageNames.map(function (n) { return { name: n, done: 0, total: 0 }; });
+  const months = {}, monthsOrder = [];
+  let totalCells = 0, doneCells = 0, totalRows = 0, fullyDone = 0;
+  const openItems = [];
+  let curMonth = "";
 
-  // Month is forward-filled — walk up until a non-empty month cell.
-  let month = "";
-  if (monthCol > 0) {
-    for (let r = row; r >= 2; r--) {
-      const v = String(sheet.getRange(r, monthCol).getDisplayValue() || "").trim();
-      if (v) { month = v; break; }
+  for (let r = 1; r < vals.length; r++) {
+    const m = monthCol >= 0 ? String(vals[r][monthCol] || "").trim() : "";
+    if (m) curMonth = m;
+    const therapy = therapyCol >= 0 ? String(vals[r][therapyCol] || "").trim() : "";
+    if (!therapy) continue;
+    totalRows++;
+    if (!(curMonth in months)) { months[curMonth] = { done: 0, total: 0 }; monthsOrder.push(curMonth); }
+    let rowDone = 0;
+    for (let s = 0; s < stageCols.length; s++) {
+      const c = stageCols[s];
+      const green = _isGreen(bg[r][c]);
+      perStage[s].total++; months[curMonth].total++; totalCells++;
+      if (green) { perStage[s].done++; months[curMonth].done++; doneCells++; rowDone++; }
     }
+    if (rowDone === stageCols.length) fullyDone++;
+    const comment = commentCol >= 0 ? String(vals[r][commentCol] || "").trim() : "";
+    if (comment) openItems.push({ month: curMonth, therapy: therapy, comment: comment });
   }
-  const therapy = therapyCol > 0
-    ? String(sheet.getRange(row, therapyCol).getDisplayValue() || "").trim()
-    : "";
 
-  const bg = sheet.getRange(row, col).getBackground();
-  const payload = {
-    password: PASSWORD,
-    tab: sheet.getName(),
-    row: row, col: col,
-    month: month,
-    therapy: therapy,
-    stage: header,
-    header: header,
-    old_value: oldValue || "",
-    new_value: newValue == null ? "" : String(newValue),
-    is_done: _isGreen(bg),
-    editor: (Session.getActiveUser() || {}).getEmail ? Session.getActiveUser().getEmail() : "",
+  const pct = function (d, t) { return t ? Math.round(100 * d / t) : 0; };
+  return {
+    overallPct: pct(doneCells, totalCells),
+    doneCells: doneCells, totalCells: totalCells,
+    totalRows: totalRows, fullyDone: fullyDone, pendingRows: totalRows - fullyDone,
+    perStage: perStage.map(function (s) { return { name: s.name, done: s.done, total: s.total, pct: pct(s.done, s.total) }; }),
+    months: monthsOrder.map(function (m) { return { month: m, done: months[m].done, total: months[m].total, pct: pct(months[m].done, months[m].total) }; }),
+    openItems: openItems,
   };
-  Logger.log("payload month='%s' therapy='%s' stage='%s' is_done=%s bg=%s",
-             month, therapy, header, payload.is_done, bg);
-  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) {
-    Logger.log("ABORT: DASHBOARD_URL not set ('%s') — set it at the top of this script", DASHBOARD_URL);
-    return;
-  }
-  try {
-    const resp = UrlFetchApp.fetch(DASHBOARD_URL + "/api/sheet-edit", {
-      method: "post", contentType: "application/json",
-      payload: JSON.stringify(payload), muteHttpExceptions: true,
-    });
-    Logger.log("POST /api/sheet-edit -> HTTP %s body=%s",
-               resp.getResponseCode(), String(resp.getContentText()).substring(0, 300));
-    const emailed = _deliverEmailFallback(resp);
-    if (emailed) Logger.log("MailApp delivered email to %s recipient(s)", emailed);
-  } catch (err) {
-    Logger.log("POST failed: %s", err);
-  }
 }
 
-// Render's free tier blocks outbound SMTP (errno 101) so the Flask
-// /api/sheet-edit and /api/weekly responses ship the rendered HTML body
-// + the list of addresses Flask couldn't reach back to us. We deliver
-// each via MailApp.sendEmail which uses the spreadsheet owner's own
-// Google account — no SMTP creds, no App Password needed.
-//
-// MailApp daily quotas: 100 recipients/day on consumer Gmail, 1500 on
-// Google Workspace — well beyond what a tracker needs.
-function _deliverEmailFallback(response) {
-  if (!response) return 0;
-  var sent = 0;
-  try {
-    const text = response.getContentText();
-    if (!text) return 0;
-    const data = JSON.parse(text);
-    const targets = data.email_failed_targets || [];
-    const subject = data.email_subject || "";
-    const html = data.email_html || "";
-    if (!targets.length || !subject || !html) return 0;
-    for (var i = 0; i < targets.length; i++) {
-      const to = String(targets[i] || "").trim();
-      if (!to) continue;
-      try {
-        MailApp.sendEmail({
-          to: to,
-          subject: subject,
-          htmlBody: html,
-          name: "Lupin Tracker",
-        });
-        sent++;
-      } catch (err) {
-        Logger.log("MailApp failed for %s: %s", to, err);
+// ───────────────────────── email body ─────────────────────────
+function _bar(pct, color) {
+  return '<table cellpadding="0" cellspacing="0" style="width:100%;background:#eef2f5;border-radius:4px;height:9px"><tr>' +
+    '<td style="width:' + pct + '%;background:' + color + ';border-radius:4px;height:9px;font-size:0">&nbsp;</td>' +
+    '<td style="font-size:0">&nbsp;</td></tr></table>';
+}
+function _esc(s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function buildDigestHtml(a) {
+  const tz = Session.getScriptTimeZone();
+  const dateStr = Utilities.formatDate(new Date(), tz, "EEE, dd MMM yyyy");
+  let stageRows = a.perStage.map(function (s) {
+    return '<tr><td style="padding:5px 0;font:13px Arial;color:#222;width:130px">' + _esc(s.name) + '</td>' +
+      '<td style="padding:5px 8px">' + _bar(s.pct, "#16a34a") + '</td>' +
+      '<td style="padding:5px 0;font:700 13px Arial;color:#16a34a;width:80px;text-align:right">' + s.done + '/' + s.total + ' · ' + s.pct + '%</td></tr>';
+  }).join("");
+  let monthRows = a.months.map(function (m) {
+    var color = m.pct >= 80 ? "#16a34a" : (m.pct >= 50 ? "#7cc24a" : "#f0b24a");
+    return '<tr><td style="padding:4px 0;font:13px Arial;color:#222;width:170px">' + _esc(m.month) + '</td>' +
+      '<td style="padding:4px 8px">' + _bar(m.pct, color) + '</td>' +
+      '<td style="padding:4px 0;font:700 13px Arial;color:#333;width:50px;text-align:right">' + m.pct + '%</td></tr>';
+  }).join("");
+  let openRows = a.openItems.length
+    ? a.openItems.map(function (it) {
+        return '<tr><td style="padding:4px 8px;font:12px Arial;color:#444;border-bottom:1px solid #eee">' + _esc(it.month) + '</td>' +
+          '<td style="padding:4px 8px;font:12px Arial;color:#444;border-bottom:1px solid #eee">' + _esc(it.therapy) + '</td>' +
+          '<td style="padding:4px 8px;font:12px Arial;color:#b4540c;border-bottom:1px solid #eee">' + _esc(it.comment) + '</td></tr>';
+      }).join("")
+    : '<tr><td colspan="3" style="padding:8px;font:12px Arial;color:#16a34a">No open notes 🎉</td></tr>';
+
+  return '' +
+'<div style="max-width:640px;margin:0 auto;font-family:Arial,sans-serif;background:#fff;border:1px solid #e4e9ef;border-radius:10px;overflow:hidden">' +
+  '<div style="background:linear-gradient(120deg,#0f1a14,#16351f);padding:18px 22px;color:#fff">' +
+    '<div style="font-size:18px;font-weight:700">🟢 Lupin Tracker — Weekly Digest</div>' +
+    '<div style="font-size:12px;color:#9dd7b4;margin-top:3px">' + dateStr + '</div>' +
+  '</div>' +
+  '<div style="padding:20px 22px">' +
+    '<table cellpadding="0" cellspacing="0" style="width:100%"><tr>' +
+      '<td style="font:800 40px Arial;color:#16a34a;line-height:1">' + a.overallPct + '%</td>' +
+      '<td style="padding-left:14px;font:13px Arial;color:#555">overall complete<br>' +
+        '<b>' + a.doneCells + '</b> of <b>' + a.totalCells + '</b> stage-tasks · <b>' + a.fullyDone + '</b>/' + a.totalRows + ' content pieces fully done</td>' +
+    '</tr></table>' +
+    '<div style="font:700 12px Arial;color:#2a3744;text-transform:uppercase;letter-spacing:.5px;margin:18px 0 6px">Stage funnel</div>' +
+    '<table cellpadding="0" cellspacing="0" style="width:100%">' + stageRows + '</table>' +
+    '<div style="font:700 12px Arial;color:#2a3744;text-transform:uppercase;letter-spacing:.5px;margin:18px 0 6px">By month</div>' +
+    '<table cellpadding="0" cellspacing="0" style="width:100%">' + monthRows + '</table>' +
+    '<div style="font:700 12px Arial;color:#2a3744;text-transform:uppercase;letter-spacing:.5px;margin:18px 0 6px">Open notes</div>' +
+    '<table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #eee;border-radius:6px">' + openRows + '</table>' +
+    '<div style="margin-top:22px;text-align:center">' +
+      '<a href="' + DASHBOARD_URL + '" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:11px 22px;border-radius:8px">Open the dashboard ↗</a>' +
+    '</div>' +
+    '<div style="margin-top:16px;font:11px Arial;color:#9aa6b2;text-align:center">Sent automatically every Friday · Lupin Tracker</div>' +
+  '</div>' +
+'</div>';
+}
+
+// ───────────────────────── recipients ─────────────────────────
+function getDigestRecipients() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(TAB_RECIPIENTS);
+  const out = [];
+  if (sh && sh.getLastRow() > 1) {
+    const data = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
+    const hdr = data[0].map(function (h) { return String(h || "").toLowerCase(); });
+    let emailCol = -1, weeklyCol = -1;
+    for (let i = 0; i < hdr.length; i++) {
+      if (emailCol < 0 && hdr[i].indexOf("email") >= 0) emailCol = i;
+      if (weeklyCol < 0 && (hdr[i].indexOf("weekly") >= 0 || hdr[i].indexOf("digest") >= 0)) weeklyCol = i;
+    }
+    for (let r = 1; r < data.length; r++) {
+      const email = emailCol >= 0 ? String(data[r][emailCol] || "").trim() : "";
+      const weekly = weeklyCol >= 0 ? String(data[r][weeklyCol] || "").trim().toLowerCase() : "yes";
+      if (email && email.indexOf("@") > 0 && (weekly === "yes" || weekly === "")) {
+        if (out.indexOf(email) < 0) out.push(email);
       }
     }
-  } catch (err) {
-    Logger.log("_deliverEmailFallback parse failed: %s", err);
   }
-  return sent;
+  if (!out.length) {
+    const owner = (Session.getEffectiveUser() && Session.getEffectiveUser().getEmail()) || "";
+    if (owner) out.push(owner);
+  }
+  return out;
 }
 
-// ───────────────────────── onEdit hook → Flask ─────────────────────────
-// Fires on VALUE/content edits (typing a date, "Yes", clearing a cell).
-
-function onEditHook(e) {
-  if (!e || !e.range) return;
-  const sheet = e.range.getSheet();
-  const dataSheet = _dataSheet(null);
-  if (!dataSheet || sheet.getName() !== dataSheet.getName()) return;
-  _notifyCell(sheet, e.range.getRow(), e.range.getColumn(),
-              e.oldValue || "", String(e.value || ""));
-}
-
-// ───────────────────── onChange hook → Flask ─────────────────────
-// Apps Script's onEdit does NOT fire on background-colour changes, only
-// on value changes. onChange WITH changeType "FORMAT" does. So when a
-// user paints a cell green (no typing), this is the trigger that fans
-// the Telegram alert. We read the active selection (the cells just
-// formatted) and notify for any stage cell among them.
-//
-// We deliberately ignore changeType "EDIT" here — onEditHook already
-// covers value edits, so handling EDIT in both would double-notify.
-
-function onChangeHook(e) {
-  Logger.log("onChangeHook changeType=%s", e && e.changeType);
-  if (!e || e.changeType !== "FORMAT") { Logger.log("skip: not FORMAT"); return; }
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const dataSheet = _dataSheet(null);
-  if (!dataSheet) { Logger.log("skip: no data sheet"); return; }
-  let range;
-  try { range = ss.getActiveRange(); } catch (err) { Logger.log("getActiveRange err: %s", err); return; }
-  if (!range) { Logger.log("skip: no active range"); return; }
-  const sheet = range.getSheet();
-  Logger.log("active range %s on sheet '%s' (data sheet '%s')",
-             range.getA1Notation(), sheet.getName(), dataSheet.getName());
-  if (sheet.getName() !== dataSheet.getName()) { Logger.log("skip: not the data sheet"); return; }
-
-  const r0 = range.getRow();
-  const c0 = range.getColumn();
-  const nR = range.getNumRows();
-  const nC = range.getNumColumns();
-  // Cap the scan so a "select all → recolour" can't fan out hundreds of
-  // messages. _notifyCell itself ignores non-stage columns.
-  if (nR * nC > 60) { Logger.log("skip: range too big (%sx%s)", nR, nC); return; }
-  for (let dr = 0; dr < nR; dr++) {
-    for (let dc = 0; dc < nC; dc++) {
-      _notifyCell(sheet, r0 + dr, c0 + dc, "", "");
-    }
+// ───────────────────────── send ─────────────────────────
+function sendWeeklyDigest() {
+  const a = analyzeSheet();
+  const html = buildDigestHtml(a);
+  const subject = "Lupin Tracker — Weekly Digest (" + a.overallPct + "% complete)";
+  const recipients = getDigestRecipients();
+  let sent = 0;
+  for (let i = 0; i < recipients.length; i++) {
+    try {
+      MailApp.sendEmail({ to: recipients[i], subject: subject, htmlBody: html, name: "Lupin Tracker" });
+      sent++;
+    } catch (err) { Logger.log("MailApp failed for %s: %s", recipients[i], err); }
   }
-}
-
-// ───────────────────────── weekly digest ─────────────────────────
-
-function weeklyDigest() {
-  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) return 0;
-  try {
-    const resp = UrlFetchApp.fetch(DASHBOARD_URL + "/api/weekly", {
-      method: "post", contentType: "application/json",
-      payload: JSON.stringify({ password: PASSWORD }), muteHttpExceptions: true,
-    });
-    return _deliverEmailFallback(resp);
-  } catch (err) {
-    return 0;
-  }
+  Logger.log("Weekly digest sent to %s recipient(s): %s", sent, recipients.join(", "));
+  return { sent: sent, recipients: recipients };
 }
 
 function weeklyDigestNow() {
-  const emailed = weeklyDigest();
+  const res = sendWeeklyDigest();
   SpreadsheetApp.getUi().alert(
-    "Triggered weekly digest.\n" +
-    "Telegram: check the bot.\n" +
-    "Email: delivered to " + emailed + " recipient" + (emailed === 1 ? "" : "s") + " via MailApp."
+    "Weekly digest sent to " + res.sent + " recipient" + (res.sent === 1 ? "" : "s") + ":\n" +
+    (res.recipients.join("\n") || "(none configured)")
   );
 }
 
-// ───────────────────────── keep-warm pinger ─────────────────────────
-// Render's free plan idles the container after ~15 min of inactivity;
-// the next hit then cold-starts (~30–50 s). This time-based trigger
-// pings /healthz every 10 min during work hours so the user never sees
-// a cold start. Window is 08:00–22:00 in the script's timezone — that's
-// ~420 hours/month of running time, well under Render free's 750-hour
-// monthly cap, while the dashboard is responsive whenever anyone is
-// likely to open it. Outside the window the service is allowed to sleep.
-//
-// Edit BUSY_START_HOUR / BUSY_END_HOUR below if you want a wider window,
-// but going 24/7 (0–24) trims your month-end buffer to ~30 hours.
-
-const BUSY_START_HOUR = 8;   // inclusive
-const BUSY_END_HOUR = 22;    // exclusive
-
-function keepWarm() {
-  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) return;
-  const hour = Number(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "H"));
-  if (hour < BUSY_START_HOUR || hour >= BUSY_END_HOUR) return;
-  try {
-    UrlFetchApp.fetch(DASHBOARD_URL + "/healthz", { muteHttpExceptions: true });
-  } catch (err) { /* best-effort; sleep would mean the fetch times out, ignore */ }
-}
-
-// ───────────────────────── trigger management ─────────────────────────
-
-function installTriggers() {
+// ───────────────────────── triggers ─────────────────────────
+function installDigestTrigger() {
   removeAllTriggers();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ScriptApp.newTrigger("onEditHook").forSpreadsheet(ss).onEdit().create();
-  ScriptApp.newTrigger("onChangeHook").forSpreadsheet(ss).onChange().create();
-  ScriptApp.newTrigger("weeklyDigest").timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).create();
-  ScriptApp.newTrigger("keepWarm").timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger("sendWeeklyDigest")
+    .timeBased().onWeekDay(ScriptApp.WeekDay.FRIDAY).atHour(19).nearMinute(30).create();
+  const tz = Session.getScriptTimeZone();
   SpreadsheetApp.getUi().alert(
-    "Triggers installed:\n" +
-    "• onEdit — value edits (typing a date / Yes)\n" +
-    "• onChange — colour-only edits (painting a cell green)\n" +
-    "• weekly digest — Mon 9 AM\n" +
-    "• keep-warm — pings Render every 10 min (08:00–22:00) so the\n" +
-    "  dashboard doesn't cold-start when you open it"
+    "Installed: weekly digest every Friday ~7:30 PM (" + tz + ").\n\n" +
+    "Google fires time triggers within about a 15-minute window, so it " +
+    "arrives between ~7:30 and 7:45 PM. Check Project Settings if the time " +
+    "zone is wrong."
   );
 }
 
 function removeAllTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
-}
-
-function testConnection() {
-  const ui = SpreadsheetApp.getUi();
-  if (!DASHBOARD_URL || DASHBOARD_URL.indexOf("http") !== 0) {
-    ui.alert("Set DASHBOARD_URL at the top of this script first.");
-    return;
-  }
-  try {
-    const r = UrlFetchApp.fetch(DASHBOARD_URL + "/healthz", { muteHttpExceptions: true });
-    ui.alert("Health check: HTTP " + r.getResponseCode() + "\n" + r.getContentText().substring(0, 200));
-  } catch (err) {
-    ui.alert("Connection failed: " + err);
-  }
 }
