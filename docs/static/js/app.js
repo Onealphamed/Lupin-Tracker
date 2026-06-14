@@ -12,7 +12,7 @@ async function refresh() {
   const d = await r.json();
   _data = d;
   if (Array.isArray(d.stages) && d.stages.length) window.STAGES = d.stages;
-  document.getElementById("last-updated").textContent = "📷 Static snapshot";
+  document.getElementById("last-updated").textContent = "Data: June 2026";
   document.getElementById("color-banner").classList.toggle("hidden", !!d.color_source);
   renderKpis(d);
   renderStageBars(d.per_stage);
