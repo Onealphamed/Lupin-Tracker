@@ -1,0 +1,89 @@
+﻿{
+    "therapies":  [
+                      {
+                          "therapy":  "RESPI",
+                          "count":  11,
+                          "items":  [
+                                        {
+                                            "sr_no":  "1",
+                                            "header":  "Adapting the 2025 ERS/EULAR CTD-ILD guidelines for India: A practical perspective",
+                                            "comm_header":  "Adaptation of 2025 ERS/EULAR CTD-ILD Guidelines for India",
+                                            "link":  "https://pmc.ncbi.nlm.nih.gov/articles/PMC12995170/",
+                                            "bucket":  "Clinical Guidelines / Recommendations (CG)"
+                                        },
+                                        {
+                                            "sr_no":  "2",
+                                            "header":  "Prospective, Single-Arm, Investigator-Initiated Study to Evaluate Efficacy and Safety of Levocetirizine Hydrochloride 5 mg and Montelukast 10 mg (L-Montus) in Patients With Seasonal Allergic Rhinitis and Perennial Allergic Rhinitis",
+                                            "comm_header":  "Levocetirizine + Montelukast in Allergic Rhinitis – Single-Arm Study",
+                                            "link":  "https://assets.cureus.com/uploads/original_article/pdf/457339/20260326-241025-2mehor.pdf",
+                                            "bucket":  "Clinical Trials (CT)"
+                                        },
+                                        {
+                                            "sr_no":  "3",
+                                            "header":  "Allergic Rhinitis Amplifies Asthma Risk in Patients With Chronic Rhinosinusitis: A Large-Scale Retrospective Cohort Analysis",
+                                            "comm_header":  "Allergic Rhinitis Increases Asthma Risk in CRS – Large Retrospective Cohort",
+                                            "link":  "https://onlinelibrary.wiley.com/doi/full/10.1002/alr.70141",
+                                            "bucket":  "Real-World Evidence (RWE)"
+                                        },
+                                        {
+                                            "sr_no":  "4",
+                                            "header":  "A Delphi consensus on nebulized budesonide for adults with asthma and COPD",
+                                            "comm_header":  "Nebulized Budesonide in Asthma \u0026 COPD – Delphi Consensus",
+                                            "link":  "https://apjai-journal.org/wp-content/uploads/2026/04/14_AP-190824-1910.pdf",
+                                            "bucket":  "Clinical Guidelines / Recommendations (CG)"
+                                        },
+                                        {
+                                            "sr_no":  "5",
+                                            "header":  "Impact-Driven Strategies for Optimizing Inhaled Therapy Adherence in COPD: The OPTIMO Delphi Consensus",
+                                            "comm_header":  "Optimizing Inhaled Therapy Adherence in COPD – OPTIMO Delphi",
+                                            "link":  "https://www.sciencedirect.com/science/article/pii/S2659663626000512",
+                                            "bucket":  "Patient-Centric Analysis (PCA)"
+                                        },
+                                        {
+                                            "sr_no":  "6",
+                                            "header":  "Addressing the global challenges of COPD and asthma: a shared vision from the Global Initiative for Chronic Obstructive Pulmonary Disease (GOLD) and the Global Initiative for Asthma (GINA)",
+                                            "comm_header":  "GOLD \u0026 GINA Joint Vision on COPD and Asthma",
+                                            "link":  "https://publications.ersnet.org/content/erj/67/2/2502244",
+                                            "bucket":  "Clinical Guidelines / Recommendations (CG)"
+                                        },
+                                        {
+                                            "sr_no":  "7",
+                                            "header":  "Real-world and Genomic data-based Asthma Insights through Network Analysis (REGAIN study): protocol for a novel retrospective and prospective longitudinal asthma cohort study",
+                                            "comm_header":  "REGAIN Study: Real-World \u0026 Genomic Asthma Cohort – Study Protocol",
+                                            "link":  "https://bmjopen.bmj.com/content/16/4/e104380.abstract",
+                                            "bucket":  "Real-World Evidence (RWE)"
+                                        },
+                                        {
+                                            "sr_no":  "8",
+                                            "header":  "Long-Term Effect of Allergen Immunotherapy in Responder Local Allergic Rhinitis Patients: Symptom Control, and Prevention of Asthma and Allergic Sensitizations",
+                                            "comm_header":  "Long-Term Allergen Immunotherapy in Local Allergic Rhinitis",
+                                            "link":  "https://onlinelibrary.wiley.com/doi/full/10.1111/all.70153",
+                                            "bucket":  "Therapy Assessment / Treatment Analysis (TA)"
+                                        },
+                                        {
+                                            "sr_no":  "9",
+                                            "header":  "Late Breaking Abstract - Does The High Use Of Oral Antiasthmatics Contribute To The Elevated Burden Of Asthma In India?",
+                                            "comm_header":  "High Use of Oral Anti-Asthmatics and Asthma Burden in India",
+                                            "link":  "https://publications.ersnet.org/content/erj/54/suppl63/oa3562",
+                                            "bucket":  "Data Analysis (DA)"
+                                        },
+                                        {
+                                            "sr_no":  "10",
+                                            "header":  "Safety and effectiveness of mepolizumab in adult patients with severe asthma with an eosinophilic phenotype from India: a Phase IV, open-label, single-arm, 24-week study (PRISM)",
+                                            "comm_header":  "Mepolizumab in Severe Eosinophilic Asthma – Phase IV PRISM Study",
+                                            "link":  "https://www.tandfonline.com/doi/full/10.1080/02770903.2025.2475452",
+                                            "bucket":  "Clinical Trials (CT)"
+                                        },
+                                        {
+                                            "sr_no":  "11",
+                                            "header":  "Late Breaking Abstract - Prolonged azithromycin maintenance treatment in patients with COPD, a follow-up of the COLUMBUS trial",
+                                            "comm_header":  "Prolonged Azithromycin in COPD – COLUMBUS Follow-up",
+                                            "link":  "https://publications.ersnet.org/content/erj/54/suppl63/oa3563",
+                                            "bucket":  "Therapy Assessment / Treatment Analysis (TA)"
+                                        }
+                                    ]
+                      }
+                  ],
+    "total":  11,
+    "updated_at":  "2026-06-14T13:07:34.371197Z"
+}

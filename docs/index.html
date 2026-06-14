@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lupin Tracker — Static Snapshot</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<link rel="stylesheet" href="static/css/dashboard.css">
+
+<!-- Apply saved theme before body parses (no flash on reload). -->
+<script>
+(function(){try{
+  var t = localStorage.getItem("lupin-theme");
+  if(!t) t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", t);
+}catch(e){
+  document.documentElement.setAttribute("data-theme","dark");
+}})();
+</script>
+
+<style>
+  /* read-only cells in the static build */
+  .cell { cursor: default !important; }
+  .snapshot-banner{
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    background:linear-gradient(135deg,#11314a,#0f283b);
+    border:1px solid #235072; color:#cfe6f5;
+    border-radius:10px; padding:11px 15px; margin-bottom:14px; font-size:13.5px;
+  }
+  .snapshot-banner b{ color:#fff; }
+  .snapshot-banner .pill{
+    background:#1d5fb0; color:#fff; font-weight:700; font-size:11px;
+    letter-spacing:.4px; padding:3px 9px; border-radius:20px; text-transform:uppercase;
+  }
+  .sheet-cta{ text-align:center; padding:34px 20px; }
+  .sheet-cta a{
+    display:inline-block; background:#16a34a; color:#fff; text-decoration:none;
+    font-weight:700; font-size:15px; padding:12px 22px; border-radius:10px;
+    box-shadow:0 3px 12px rgba(22,163,74,.35);
+  }
+  .sheet-cta p{ color:var(--text-dim); margin-top:14px; font-size:13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>🟢 Lupin Tracker</h1>
+  <div class="meta">
+    <span class="refresh-dot"></span><span id="last-updated">Loading…</span>
+    <a href="https://docs.google.com/spreadsheets/d/1iVYMDAIafpNMKieIJbLCiRplxeBokOGHe_knWQBhTJY/edit?usp=sharing" target="_blank" rel="noopener">Open Sheet ↗</a>
+    <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()"
+      title="Toggle light / dark theme" aria-label="Toggle theme">🌙</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="snapshot-banner">
+    <span class="pill">Static snapshot</span>
+    <span>Read-only copy of the live dashboard &mdash; data captured <b>June&nbsp;2026</b>.
+      The hosted dashboard is offline; this snapshot is served free from GitHub&nbsp;Pages.
+      To make changes, edit the <b>Google&nbsp;Sheet</b> and regenerate the snapshot.</span>
+  </div>
+
+  <div id="color-banner" class="banner hidden"></div>
+
+  <div class="owner-strip" id="owner-strip"></div>
+  <div class="kpi-strip" id="kpi-strip"></div>
+  <div class="stagebar-wrap" id="stagebars"></div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-view="month">🗓 Month-wise</button>
+    <button class="tab-btn" data-view="therapy">💊 Therapy-wise</button>
+    <button class="tab-btn" data-view="non-therapy">📰 Non-therapy</button>
+    <button class="tab-btn" data-view="toc">📚 TOC Bank</button>
+    <button class="tab-btn" data-view="sheet">📄 Live sheet</button>
+  </div>
+
+  <div class="toolbar" id="toolbar">
+    <input id="search" type="search" placeholder="Filter by month, therapy, comment…">
+    <button class="btn" id="expand-all">Expand all</button>
+    <button class="btn" id="collapse-all">Collapse all</button>
+    <span class="legend">
+      <span><i style="background:var(--done-soft);border:1px solid rgba(76,175,80,.5)"></i>Completed (green)</span>
+      <span><i style="background:transparent;border:1px solid var(--border)"></i>Pending</span>
+      <span><i class="row-blink oam"></i>OAM is the current blocker</span>
+      <span><i class="row-blink lupin"></i>Lupin is the current blocker</span>
+    </span>
+  </div>
+
+  <div class="view active" id="view-month"><div id="month-groups"></div></div>
+  <div class="view" id="view-therapy"><div id="therapy-groups"></div></div>
+  <div class="view" id="view-non-therapy"><div id="non-therapy-groups"></div></div>
+  <div class="view" id="view-toc">
+    <div class="panel" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div><div style="font-size:13px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px">Total articles</div>
+        <div id="toc-total" style="font-size:26px;font-weight:700;margin-top:4px">—</div></div>
+      <div style="font-size:11px;color:var(--text-dim);max-width:280px;text-align:right">
+        Click any article header to open the source link in a new tab.<br>
+        Edit the <b>TOC Bank</b> sheet to add/remove entries.
+      </div>
+    </div>
+    <div id="toc-groups"></div>
+  </div>
+  <div class="view" id="view-sheet">
+    <div class="panel">
+      <h2>📄 Live sheet (actual colours)</h2>
+      <div class="sheet-cta">
+        <a href="https://docs.google.com/spreadsheets/d/1iVYMDAIafpNMKieIJbLCiRplxeBokOGHe_knWQBhTJY/edit?usp=sharing" target="_blank" rel="noopener">Open the Google Sheet ↗</a>
+        <p>Google blocks embedding Sheets in other pages, so the live sheet opens in a new tab.<br>
+           It is the single source of truth behind this dashboard.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Drilldown modal — populated by openDrilldown() in analytics.js -->
+<div id="drilldown" class="dd-overlay" onclick="if(event.target===this)closeDrilldown()">
+  <div class="dd-card">
+    <div class="dd-head">
+      <div id="dd-title">—</div>
+      <button class="dd-close" onclick="closeDrilldown()" title="Close (Esc)">✕</button>
+    </div>
+    <div id="dd-body" class="dd-body-scroll"></div>
+  </div>
+</div>
+
+<!-- Boot block — static values (no server / Jinja). -->
+<script>
+window.LUPIN_BOOT = {
+  stages: ["TOC Shared","TOC Approved","Design Plan","CRD Upload"],
+  apps_script_url: "",
+  data_tab: ""
+};
+</script>
+<script src="static/js/util.js"></script>
+<script src="static/js/theme.js"></script>
+<script src="static/js/analytics.js"></script>
+<script src="static/js/matrix-views.js"></script>
+<script src="static/js/tocbank.js"></script>
+<script src="static/js/app.js"></script>
+
+</body>
+</html>
