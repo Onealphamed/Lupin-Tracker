@@ -169,22 +169,30 @@ function renderNotes(resp) {
   }
   if (!groups.length) { wrap.innerHTML = help; return; }
   groups.sort(function (a, b) { return _parseDMY(b.date) - _parseDMY(a.date); });
-  wrap.innerHTML = groups.map(function (grp) {
-    const items = grp.points.map(function (p) {
-      let pill = "";
-      const st = String(p.status || "").toLowerCase();
-      if (st) {
-        const cls = (st.indexOf("done") >= 0 || st.indexOf("closed") >= 0 || st.indexOf("complete") >= 0) ? "done" : "open";
-        pill = ' <span class="notes-status ' + cls + '">' + esc(p.status) + '</span>';
+  function pillOf(status) {
+    const st = String(status || "").toLowerCase();
+    if (!st) return "";
+    const cls = (st.indexOf("done") >= 0 || st.indexOf("closed") >= 0 || st.indexOf("complete") >= 0) ? "done" : "open";
+    return '<span class="notes-status ' + cls + '">' + esc(status) + '</span>';
+  }
+  let body = "";
+  groups.forEach(function (grp) {
+    grp.points.forEach(function (p, idx) {
+      let row = "<tr>";
+      if (idx === 0) {
+        const span = grp.points.length;
+        row += '<td class="nt-date" rowspan="' + span + '">' + (grp.date ? esc(grp.date) : "—") + '</td>';
+        row += '<td class="nt-meeting" rowspan="' + span + '">' +
+          (grp.meeting ? '<span class="notes-meeting">' + esc(grp.meeting) + '</span>' : "") + '</td>';
       }
-      return "<li>" + esc(p.note) + pill + "</li>";
-    }).join("");
-    const meeting = grp.meeting ? '<span class="notes-meeting">' + esc(grp.meeting) + '</span>' : "";
-    const date = grp.date ? '<span class="notes-date">📅 ' + esc(grp.date) + '</span>'
-                          : '<span class="notes-date">📝 Note</span>';
-    return '<div class="panel notes-card"><div class="notes-head">' + date + meeting + '</div>' +
-      '<ul class="notes-list">' + items + '</ul></div>';
-  }).join("");
+      row += '<td class="nt-note">' + esc(p.note) + '</td>';
+      row += '<td class="nt-status">' + pillOf(p.status) + '</td></tr>';
+      body += row;
+    });
+  });
+  wrap.innerHTML = '<div class="panel notes-wrap"><table class="notes-table">' +
+    '<thead><tr><th>Date</th><th>Meeting</th><th>Note</th><th>Status</th></tr></thead>' +
+    '<tbody>' + body + '</tbody></table></div>';
 }
 
 // ── load + render ──
