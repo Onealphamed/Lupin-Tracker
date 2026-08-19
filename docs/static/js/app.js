@@ -12,6 +12,7 @@
 // ── config ──
 const SHEET_ID = "1iVYMDAIafpNMKieIJbLCiRplxeBokOGHe_knWQBhTJY";
 const TOC_TAB  = "TOC Bank";
+const NOTES_TAB = "Notes";
 const STAGE_NAMES = ["TOC Shared", "TOC Approved", "Design Plan", "CRD Upload"];
 // Fixed column layout of the data tab (0-based):
 //   0 Months | 1 (blank) | 2 Therapies | 3 TOC Shared | 4 TOC Approved
@@ -22,7 +23,7 @@ window.STAGES = STAGE_NAMES.slice();
 let _data = null;
 
 // ── gviz JSONP loader (script tag → no CORS needed) ──
-function gvizLoad(sheetName) {
+function gvizLoad(sheetName, headerRows) {
   return new Promise(function (resolve, reject) {
     const cb = "__gv" + Math.random().toString(36).slice(2);
     const s = document.createElement("script");
@@ -30,7 +31,7 @@ function gvizLoad(sheetName) {
     function cleanup() { clearTimeout(timer); try { delete window[cb]; } catch (e) {} s.remove(); }
     window[cb] = function (resp) { cleanup(); resolve(resp); };
     let url = "https://docs.google.com/spreadsheets/d/" + SHEET_ID +
-      "/gviz/tq?headers=0&tqx=out:json;responseHandler:" + cb;
+      "/gviz/tq?headers=" + (headerRows == null ? 0 : headerRows) + "&tqx=out:json;responseHandler:" + cb;
     if (sheetName) url += "&sheet=" + encodeURIComponent(sheetName);
     s.onerror = function () { cleanup(); reject(new Error("script error")); };
     s.src = url;
@@ -138,6 +139,54 @@ function buildToc(grid) {
   return { total: total, therapies: order.map(function (k) { return { therapy: k, count: by[k].length, items: by[k] }; }) };
 }
 
+// ── Meeting notes (Notes tab: Date | Meeting | Note | Status) ──
+function _parseDMY(s) {
+  if (!s) return 0;
+  const m = String(s).match(/(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})/);
+  if (m) { let y = +m[3]; if (y < 100) y += 2000; return new Date(y, +m[2] - 1, +m[1]).getTime(); }
+  const d = Date.parse(s); return isNaN(d) ? 0 : d;
+}
+function renderNotes(resp) {
+  const wrap = document.getElementById("notes-groups");
+  const help = '<div class="notes-empty">No meeting notes yet.<br>' +
+    'Add a <b>Notes</b> tab to the Google Sheet with columns ' +
+    '<b>Date&nbsp;·&nbsp;Meeting&nbsp;·&nbsp;Note&nbsp;·&nbsp;Status</b>, type your weekly / monthly points, and they show up here.</div>';
+  if (!resp || resp.status === "error" || !resp.table || !resp.table.rows) { wrap.innerHTML = help; return; }
+  const grid = tableToGrid(resp.table);   // headers=1 → data rows only
+  const groups = []; let curDate = "", curMeeting = "";
+  for (let i = 0; i < grid.length; i++) {
+    const raw = grid[i];
+    const g = function (j) { return (j < raw.length ? String(raw[j] || "").trim() : ""); };
+    const date = g(0), meeting = g(1), note = g(2), status = g(3);
+    if (date) curDate = date;
+    if (meeting) curMeeting = meeting;
+    if (!note) continue;
+    const key = curDate + "||" + curMeeting;
+    let grp = null;
+    for (let k = 0; k < groups.length; k++) { if (groups[k].key === key) { grp = groups[k]; break; } }
+    if (!grp) { grp = { key: key, date: curDate, meeting: curMeeting, points: [] }; groups.push(grp); }
+    grp.points.push({ note: note, status: status });
+  }
+  if (!groups.length) { wrap.innerHTML = help; return; }
+  groups.sort(function (a, b) { return _parseDMY(b.date) - _parseDMY(a.date); });
+  wrap.innerHTML = groups.map(function (grp) {
+    const items = grp.points.map(function (p) {
+      let pill = "";
+      const st = String(p.status || "").toLowerCase();
+      if (st) {
+        const cls = (st.indexOf("done") >= 0 || st.indexOf("closed") >= 0 || st.indexOf("complete") >= 0) ? "done" : "open";
+        pill = ' <span class="notes-status ' + cls + '">' + esc(p.status) + '</span>';
+      }
+      return "<li>" + esc(p.note) + pill + "</li>";
+    }).join("");
+    const meeting = grp.meeting ? '<span class="notes-meeting">' + esc(grp.meeting) + '</span>' : "";
+    const date = grp.date ? '<span class="notes-date">📅 ' + esc(grp.date) + '</span>'
+                          : '<span class="notes-date">📝 Note</span>';
+    return '<div class="panel notes-card"><div class="notes-head">' + date + meeting + '</div>' +
+      '<ul class="notes-list">' + items + '</ul></div>';
+  }).join("");
+}
+
 // ── load + render ──
 async function loadAll() {
   const lu = document.getElementById("last-updated");
@@ -161,6 +210,10 @@ async function loadAll() {
     const tocResp = await gvizLoad(TOC_TAB);
     renderTocBank(buildToc(tableToGrid(tocResp.table)));
   } catch (e) { console.error("toc load failed", e); }
+  try {
+    const notesResp = await gvizLoad(NOTES_TAB, 1);
+    renderNotes(notesResp);
+  } catch (e) { renderNotes(null); }
 }
 
 /* ── Tabs ── */
@@ -171,7 +224,7 @@ document.querySelectorAll(".tab-btn").forEach(function (b) {
     b.classList.add("active");
     document.getElementById("view-" + b.dataset.view).classList.add("active");
     const v = b.dataset.view;
-    document.getElementById("toolbar").style.display = (v === "sheet" || v === "toc") ? "none" : "flex";
+    document.getElementById("toolbar").style.display = (v === "sheet" || v === "toc" || v === "notes") ? "none" : "flex";
   });
 });
 
